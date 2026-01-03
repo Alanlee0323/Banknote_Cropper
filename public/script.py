@@ -1,221 +1,185 @@
 import asyncio
 import js
-from pyscript import document, display
-from pyodide.ffi import create_proxy, to_js
+from pyscript import document
+from pyodide.ffi import create_proxy
 import io
 import zipfile
+import sys
 
-print("DEBUG: script.py is loading...")
+# Setup JS console logger
+def log(msg):
+    js.console.log(f"[Python] {msg}")
+    print(f"[Python] {msg}")
+    # Also try to update UI directly if possible
+    status = document.getElementById("status-text")
+    if status:
+        status.innerText = msg
 
-# Late import for cv2 to allow manual install if py-config fails
+log("Script loading started...")
+
 cv2 = None
 np = None
 
+async def install_opencv():
+    log("Importing micropip...")
+    try:
+        import micropip
+        log("micropip imported.")
+    except ImportError as e:
+        log(f"Failed to import micropip: {e}")
+        return False
+
+    log("Installing opencv-python via micropip...")
+    try:
+        loader_status = document.getElementById("loader-status")
+        if loader_status:
+            loader_status.innerText = "Downloading OpenCV (this may take a moment)..."
+        
+        await micropip.install("opencv-python")
+        log("micropip install completed.")
+        return True
+    except Exception as e:
+        log(f"Failed to install opencv-python: {e}")
+        if loader_status:
+            loader_status.innerText = f"Install Failed: {e}"
+        return False
+
 async def ensure_dependencies():
     global cv2, np
-    loader_status = document.getElementById("loader-status")
+    log("Checking dependencies...")
+    
     try:
         import cv2 as _cv2
         import numpy as _np
         cv2 = _cv2
         np = _np
+        log("OpenCV already available.")
     except ImportError:
-        import micropip
-        if loader_status:
-            loader_status.innerText = "Downloading OpenCV Engine (~30MB)..."
-        print("Installing opencv-python...")
-        await micropip.install("opencv-python")
-        import cv2 as _cv2
-        import numpy as _np
-        cv2 = _cv2
-        np = _np
-    
-    if loader_status:
-        loader_status.innerText = "Finalizing..."
-    print("Dependencies loaded successfully")
+        log("OpenCV not found. Attempting installation...")
+        success = await install_opencv()
+        if not success:
+            log("Critical: OpenCV installation failed.")
+            return
 
-# --- UI Helpers ---
-
-def log_to_ui(message, is_error=False):
-    """Logs a message to the UI console."""
-    print(message)
-    log_container = document.getElementById("log-container")
-    if log_container:
-        entry = document.createElement("div")
-        entry.innerText = f">> {message}"
-        if is_error:
-            entry.classList.add("text-red-500")
-        log_container.appendChild(entry)
-        log_container.scrollTop = log_container.scrollHeight
-
-def update_progress(current, total, status_msg=""):
-    """Updates the progress bar and status text."""
-    percentage = int((current / total) * 100) if total > 0 else 0
-    
-    progress_bar = document.getElementById("progress-bar")
-    progress_text = document.getElementById("progress-text")
-    status_text = document.getElementById("status-text")
-    
-    if progress_bar:
-        progress_bar.style.width = f"{percentage}%"
-        progress_bar.innerText = f"{percentage}%"
-    
-    if progress_text:
-        progress_text.innerText = f"{percentage}%"
-        
-    if status_text and status_msg:
-        status_text.innerText = status_msg
-
-def show_section(section_id):
-    """Toggles visibility of UI sections."""
-    sections = ["upload-section", "processing-section", "download-section"]
-    for sec in sections:
-        el = document.getElementById(sec)
-        if el:
-            if sec == section_id:
-                el.classList.remove("hidden")
-            else:
-                el.classList.add("hidden")
+        try:
+            import cv2 as _cv2
+            import numpy as _np
+            cv2 = _cv2
+            np = _np
+            log("OpenCV imported successfully after install.")
+        except ImportError as e:
+            log(f"Import failed even after install: {e}")
 
 # --- Core Logic ---
 
 def crop_banknote(image_bytes):
-    """
-    Decodes an image from bytes, finds the largest contour (assumed banknote),
-    and returns the cropped image encoded as PNG bytes.
-    """
-    if cv2 is None or np is None:
+    if cv2 is None:
+        log("Error: cv2 is None during crop attempt")
         return None
         
     try:
-        # Decode image
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        if img is None:
-            return None
+        if img is None: return None
 
-        # Convert to grayscale
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        
-        # Canny edge detection
         edged = cv2.Canny(blurred, 30, 150)
-        
-        # Find contours
         contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        if not contours:
-            return None
+        if not contours: return None
 
-        # Sort contours by area, keep largest
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        largest_contour = contours[0]
+        x, y, w, h = cv2.boundingRect(contours[0])
         
-        # Get bounding box
-        x, y, w, h = cv2.boundingRect(largest_contour)
-        
-        # Filter small noise
-        img_h, img_w = img.shape[:2]
-        if w < img_w * 0.1 or h < img_h * 0.1:
-            return None
+        if w < img.shape[1] * 0.1 or h < img.shape[0] * 0.1: return None
 
-        # Crop
         cropped = img[y:y+h, x:x+w]
-        
-        # Encode back to PNG
         _, encoded_img = cv2.imencode(".png", cropped)
         return encoded_img.tobytes()
 
     except Exception as e:
-        log_to_ui(f"Error cropping image: {str(e)}", is_error=True)
+        log(f"Crop Error: {e}")
         return None
 
 async def process_images(event):
-    """Main event handler for processing."""
-    
-    # Ensure deps are loaded (if click happens fast)
     if cv2 is None:
-        log_to_ui("Waiting for dependencies to initialize...")
+        log("Cannot process: OpenCV not loaded.")
         await ensure_dependencies()
+        if cv2 is None: return
 
     files = js.window.selected_files
     if not files or files.length == 0:
-        log_to_ui("No files selected!", is_error=True)
+        log("No files selected.")
         return
 
-    show_section("processing-section")
-    total_files = files.length
-    log_to_ui(f"Starting processing of {total_files} files...")
+    # UI Reset
+    document.getElementById("processing-section").classList.remove("hidden")
+    document.getElementById("download-section").classList.add("hidden")
+    document.getElementById("upload-section").classList.add("hidden")
+    
+    log(f"Processing {files.length} files...")
     
     zip_buffer = io.BytesIO()
-    success_count = 0
+    count = 0
     
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for i in range(total_files):
-            file = files.item(i)
-            file_name = file.name
-            
-            update_progress(i, total_files, f"Processing {file_name}...")
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i in range(files.length):
+            f = files.item(i)
+            # Update progress bar
+            pct = int(((i) / files.length) * 100)
+            bar = document.getElementById("progress-bar")
+            if bar:
+                bar.style.width = f"{pct}%"
+                bar.innerText = f"{pct}%"
             
             try:
-                array_buffer = await file.arrayBuffer()
-                data = array_buffer.to_bytes()
-                
-                cropped_bytes = crop_banknote(data)
-                
-                if cropped_bytes:
-                    base_name = ".".join(file_name.split(".")[:-1])
-                    new_name = f"{base_name}_cropped.png"
-                    zip_file.writestr(new_name, cropped_bytes)
-                    success_count += 1
-                    log_to_ui(f"Cropped: {file_name}")
-                else:
-                    log_to_ui(f"Skipped: {file_name}")
-                    
+                ab = await f.arrayBuffer()
+                data = ab.to_bytes()
+                res = crop_banknote(data)
+                if res:
+                    zf.writestr(f"{f.name}_cropped.png", res)
+                    count += 1
+                    log(f"Cropped {f.name}")
             except Exception as e:
-                log_to_ui(f"Error processing {file_name}: {str(e)}", is_error=True)
+                log(f"Failed {f.name}: {e}")
             
             await asyncio.sleep(0.01)
 
-    update_progress(total_files, total_files, "Finalizing ZIP archive...")
+    # Finalize
+    document.getElementById("progress-bar").style.width = "100%"
+    document.getElementById("progress-bar").innerText = "100%"
     
-    if success_count > 0:
-        log_to_ui(f"Processing complete. {success_count}/{total_files} images cropped.")
-        zip_data = zip_buffer.getvalue()
-        js_array = js.Uint8Array.new(len(zip_data))
-        js_array.assign(zip_data)
+    if count > 0:
+        js_data = js.Uint8Array.new(len(zip_buffer.getvalue()))
+        js_data.assign(zip_buffer.getvalue())
         
-        document.getElementById("success-count").innerText = str(success_count)
-        show_section("download-section")
-        js.window.trigger_download(js_array, "cropped_banknotes.zip")
+        document.getElementById("success-count").innerText = str(count)
+        document.getElementById("processing-section").classList.add("hidden")
+        document.getElementById("download-section").classList.remove("hidden")
+        
+        js.window.trigger_download(js_data, "cropped_banknotes.zip")
     else:
-        log_to_ui("No images were successfully cropped.", is_error=True)
-        document.getElementById("success-count").innerText = "0"
-        show_section("download-section")
+        log("No images cropped.")
+        document.getElementById("processing-section").classList.add("hidden")
+        document.getElementById("upload-section").classList.remove("hidden")
 
-# --- Initialization ---
+# --- Main ---
 
 async def main():
-    # 1. Load dependencies first
+    log("Main function started.")
     await ensure_dependencies()
     
-    # 2. Setup event listeners
     start_btn = document.getElementById("start-btn")
     if start_btn:
-        on_click_proxy = create_proxy(process_images)
-        start_btn.addEventListener("click", on_click_proxy)
+        start_btn.addEventListener("click", create_proxy(process_images))
+        log("Button listener attached.")
     
-    # 3. Hide loader
     loader = document.getElementById("env-loader")
     if loader:
         loader.style.display = "none"
     
-    log_to_ui("System Ready (OpenCV loaded)")
+    log("System Initialized.")
 
 if __name__ == "__main__":
-    # In PyScript, we can use top-level await if it's a module, 
-    # but here we'll use asyncio to run the main coro.
     asyncio.ensure_future(main())
