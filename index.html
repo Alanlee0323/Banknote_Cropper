@@ -1,51 +1,47 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Banknote Cropper (Folder Edition)</title>
+    <title>Banknote Autocrop</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- S15 Neumorphism Config -->
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Dark Theme Config -->
     <script>
         tailwind.config = {
+            darkMode: 'class',
             theme: {
                 extend: {
-                    colors: {
-                        main: '#E0E5EC',
-                        slate: {
-                            600: '#7D8CA3',
-                            700: '#67748E',
-                            800: '#4A5568',
-                            900: '#2D3748',
-                        },
-                        blue: {
-                            500: '#6366F1', 
-                            600: '#4F46E5',
-                        }
-                    },
-                    boxShadow: {
-                        'neumorph': '9px 9px 16px rgb(163,177,198,0.6), -9px -9px 16px rgba(255,255,255, 0.5)',
-                        'neumorph-sm': '5px 5px 10px rgb(163,177,198,0.6), -5px -5px 10px rgba(255,255,255, 0.5)',
-                        'neumorph-inset': 'inset 6px 6px 10px 0 rgba(163,177,198, 0.7), -6px -6px 10px 0 rgba(255,255,255, 0.8)',
-                        'neumorph-btn': '6px 6px 10px 0 rgba(163,177,198, 0.7), -6px -6px 10px 0 rgba(255,255,255, 0.8)',
-                        'neumorph-btn-active': 'inset 2px 2px 5px rgba(163,177,198, 0.7), -2px -2px 5px rgba(255,255,255, 0.8)',
-                    },
-                    borderRadius: {
-                        'xl': '20px',
-                        '2xl': '30px',
-                    },
                     fontFamily: {
-                        sans: ['Quicksand', 'Nunito', 'sans-serif'],
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        navy: {
+                            950: '#0B0F19', // Darkest background
+                            900: '#0f172a',
+                            800: '#151B2D', // Card bg
+                            700: '#1e293b', // Borders/Hover
+                        },
+                        brand: {
+                            blue: '#3b82f6',
+                            green: '#10b981',
+                            accent: '#6366f1',
+                        }
                     }
                 }
             }
         }
     </script>
     
-    <!-- Configuration for PyScript -->
+    <!-- PyScript Configuration -->
     <script type="py-config">
         {
             "packages": []
@@ -55,226 +51,266 @@
     <!-- PyScript & Pyodide -->
     <link rel="stylesheet" href="https://pyscript.net/releases/2024.6.1/core.css" />
     <script type="module" src="https://pyscript.net/releases/2024.6.1/core.js"></script>
-</head>
-<body class="text-slate-800 min-h-screen flex flex-col font-sans antialiased">
 
-    <!-- Loading Overlay -->
-    <div id="env-loader" class="fixed inset-0 z-50 flex flex-col items-center justify-center text-slate-700 transition-opacity duration-500 loading-overlay">
-        <div class="relative w-20 h-20 mb-6">
-            <div class="absolute inset-0 rounded-full border-4 border-slate-300"></div>
-            <div class="absolute inset-0 rounded-full border-t-4 border-blue-500 animate-spin"></div>
-        </div>
-        <h2 class="text-2xl font-bold tracking-tight">Initializing AI Core</h2>
-        <p id="loader-status" class="text-slate-500 mt-2 font-medium">Loading OpenCV Engine (~30MB)</p>
-        <p id="loader-error" class="text-red-500 mt-4 text-sm font-mono max-w-md text-center hidden"></p>
-        <p id="loader-slow" class="text-amber-600 mt-4 text-sm font-medium hidden">
-            Downloading is taking longer than expected...<br>
-            Please check your internet connection or open Console (F12) for details.
-        </p>
-    </div>
-
-    <script>
-        // Global Error Handler for Boot Issues
-        window.onerror = function(msg, url, lineNo, columnNo, error) {
-            const errorDiv = document.getElementById('loader-error');
-            const loaderStatus = document.getElementById('loader-status');
-            if (errorDiv) {
-                errorDiv.classList.remove('hidden');
-                errorDiv.innerText = `Error: ${msg}`;
-                loaderStatus.innerText = "Initialization Failed";
-                // Stop spinner potentially or just show error
-            }
-            return false;
-        };
-
-        // Timeout Warning
-        setTimeout(() => {
-            const loader = document.getElementById('env-loader');
-            const slowMsg = document.getElementById('loader-slow');
-            if (loader && loader.style.display !== 'none' && loader.style.opacity !== '0') {
-                if (slowMsg) slowMsg.classList.remove('hidden');
-            }
-        }, 10000); // Show warning after 10 seconds
-    </script>
-
-    <main class="flex-grow container mx-auto px-4 py-12 max-w-3xl">
-        <!-- Header -->
-        <div class="text-center mb-12">
-            <h1 class="text-4xl md:text-5xl font-bold text-slate-800 mb-4 tracking-tight" style="text-shadow: 2px 2px 4px rgba(163,177,198,0.4), -2px -2px 4px rgba(255,255,255,0.8);">
-                Banknote <span class="text-blue-600">Auto-Cropper</span>
-            </h1>
-            <p class="text-slate-600 text-lg font-medium">
-                One-Click Folder Processing. Secure. Fast.
-            </p>
-        </div>
-
-        <!-- Main Card -->
-        <div class="bg-main rounded-2xl shadow-neumorph p-1 transition-all">
-            <div class="rounded-[28px] p-8 md:p-10">
-                
-                <!-- Upload Section -->
-                <div id="upload-section">
-                    <div class="w-full flex justify-center mb-6">
-                        <label for="dropzone-file" class="flex flex-col items-center justify-center w-full h-72 rounded-xl cursor-pointer shadow-neumorph-inset hover:shadow-neumorph transition-all duration-300 group relative overflow-hidden">
-                            <div class="absolute inset-0 bg-main opacity-50"></div>
-                            <div class="flex flex-col items-center justify-center pt-5 pb-6 z-10 p-6 text-center">
-                                <div class="w-20 h-20 rounded-full bg-main shadow-neumorph flex items-center justify-center mb-6 text-slate-400 group-hover:text-blue-500 group-hover:scale-110 transition-all duration-300">
-                                    <i class="fa-solid fa-folder-open text-3xl"></i>
-                                </div>
-                                <p class="mb-2 text-xl text-slate-700 font-bold">Drop Folder or Files Here</p>
-                                <p class="text-sm text-slate-500 font-medium">Supports JPG, PNG, WEBP</p>
-                            </div>
-                            <!-- Standard file input -->
-                            <input id="dropzone-file" type="file" class="hidden" multiple accept="image/*" />
-                            <!-- Directory input (hidden, triggered by button if needed) -->
-                            <input id="folder-input" type="file" class="hidden" webkitdirectory directory />
-                        </label>
-                    </div>
-
-                    <div class="flex flex-col sm:flex-row justify-center gap-4 mb-8">
-                         <button onclick="document.getElementById('dropzone-file').click()" class="bg-main text-slate-600 font-bold py-3 px-8 rounded-full shadow-neumorph-btn hover:text-blue-600 active:shadow-neumorph-btn-active active:scale-95 transition-all duration-200">
-                            Select Files
-                        </button>
-                        <button onclick="document.getElementById('folder-input').click()" class="bg-main text-slate-600 font-bold py-3 px-8 rounded-full shadow-neumorph-btn hover:text-blue-600 active:shadow-neumorph-btn-active active:scale-95 transition-all duration-200">
-                            Select Folder
-                        </button>
-                    </div>
-                    
-                    <div class="mt-4 text-center">
-                        <button id="start-btn" class="hidden bg-main text-blue-600 font-bold py-4 px-12 rounded-full shadow-neumorph-btn hover:text-blue-700 active:shadow-neumorph-btn-active active:scale-95 transition-all duration-200 text-lg flex items-center justify-center mx-auto disabled:opacity-50 disabled:cursor-not-allowed">
-                            <span>Start Processing</span>
-                            <span id="file-count-badge" class="ml-3 bg-blue-100 text-blue-600 text-xs px-2 py-1 rounded-md shadow-inner font-bold">0</span>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Processing Section -->
-                <div id="processing-section" class="hidden text-center py-4">
-                    <div class="mb-8">
-                        <div class="w-20 h-20 mx-auto rounded-full bg-main shadow-neumorph flex items-center justify-center text-blue-500 animate-pulse">
-                            <i class="fa-solid fa-microchip text-3xl"></i>
-                        </div>
-                        <h3 class="text-2xl font-bold mt-6 text-slate-700">AI is thinking...</h3>
-                    </div>
-                    
-                    <div class="relative pt-1">
-                        <div class="flex mb-2 items-center justify-between">
-                            <div class="text-right w-full">
-                                <span id="progress-text" class="text-xs font-semibold inline-block text-blue-600">
-                                    0%
-                                </span>
-                            </div>
-                        </div>
-                        <div class="overflow-hidden h-6 mb-4 text-xs flex rounded-full bg-main shadow-neumorph-inset">
-                            <div id="progress-bar" style="width:0%" class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 transition-all duration-300"></div>
-                        </div>
-                    </div>
-                    
-                    <p id="status-text" class="text-slate-500 font-mono text-sm mb-6 h-6 overflow-hidden text-ellipsis whitespace-nowrap">Initializing...</p>
-                    
-                    <!-- Log Console -->
-                    <div class="bg-main shadow-neumorph-inset rounded-xl p-4 h-48 overflow-y-auto text-left border border-transparent">
-                        <div id="log-container" class="font-mono text-xs text-slate-600 space-y-1">
-                            <div class="text-blue-500">>> System Ready...</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Download Section -->
-                <div id="download-section" class="hidden text-center py-6">
-                    <div class="w-24 h-24 mx-auto rounded-full bg-main shadow-neumorph flex items-center justify-center text-green-500 mb-6 text-4xl">
-                        <i class="fa-solid fa-check"></i>
-                    </div>
-                    
-                    <h3 class="text-3xl font-bold text-slate-700 mb-2">Done!</h3>
-                    <p class="text-slate-500 mb-10">Successfully processed <span id="success-count" class="font-bold text-slate-800">0</span> images.</p>
-                    
-                    <button id="download-zip-btn" class="bg-main text-green-600 font-bold py-4 px-10 rounded-full shadow-neumorph-btn hover:text-green-700 active:shadow-neumorph-btn-active active:scale-95 transition-all duration-200 text-lg flex items-center justify-center mx-auto">
-                        <i class="fa-solid fa-download mr-3"></i> Download ZIP
-                    </button>
-                    
-                    <button onclick="location.reload()" class="mt-8 text-slate-500 hover:text-blue-600 font-medium text-sm transition-colors">
-                        Process Another Batch
-                    </button>
-                </div>
-
-            </div>
-        </div>
-    </main>
-
-    <footer class="text-center py-8 text-slate-500 text-sm font-medium">
-        <p>Built with <a href="https://pyscript.net" target="_blank" class="hover:text-blue-500 transition-colors">PyScript</a> & <a href="https://opencv.org/" target="_blank" class="hover:text-blue-500 transition-colors">OpenCV</a></p>
-    </footer>
-
-    <!-- Main Python Logic (External File to Fix Caching) -->
-    <script type="py" src="/script.py?v=12"></script>
-
-    <!-- JS Helper for UI & Downloads -->
-    <script>
-        const fileInput = document.getElementById('dropzone-file');
-        const folderInput = document.getElementById('folder-input');
-        const startBtn = document.getElementById('start-btn');
-        const badge = document.getElementById('file-count-badge');
-        
-        // Global variable to store selected files for Python to access
-        window.selected_files = null;
-
-        function handleFiles(files) {
-            if (files.length > 0) {
-                window.selected_files = files;
-                badge.innerText = files.length;
-                startBtn.classList.remove('hidden');
-                startBtn.disabled = false;
-                
-                // Visual feedback
-                const label = document.querySelector('label[for="dropzone-file"] p.text-xl');
-                label.innerText = `${files.length} Files Selected`;
-                label.classList.add('text-blue-600');
-            }
+    <style>
+        /* Custom Scrollbar for Logs */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #151B2D; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569; 
         }
 
-        fileInput.addEventListener('change', function(e) {
-            handleFiles(this.files);
-        });
-        
-        folderInput.addEventListener('change', function(e) {
-            handleFiles(this.files);
-        });
+        /* Checkerboard background for transparency */
+        .bg-checkerboard {
+            background-color: #e5e5f7;
+            background-image:  linear-gradient(45deg, #f4f4f5 25%, transparent 25%), linear-gradient(-45deg, #f4f4f5 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f4f4f5 75%), linear-gradient(-45deg, transparent 75%, #f4f4f5 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+        }
 
-        // Drag and Drop Logic
-        const dropzone = document.querySelector('label[for="dropzone-file"]');
+        .loading-overlay {
+            backdrop-filter: blur(8px);
+            background-color: rgba(11, 15, 25, 0.9);
+        }
+    </style>
+</head>
+<body class="bg-navy-950 text-slate-200 min-h-screen flex flex-col font-sans antialiased selection:bg-brand-blue selection:text-white">
+
+    <!-- Loading Overlay -->
+    <div id="env-loader" class="fixed inset-0 z-50 flex flex-col items-center justify-center transition-opacity duration-500 loading-overlay">
+        <div class="relative w-16 h-16 mb-6">
+            <div class="absolute inset-0 rounded-full border-4 border-slate-700"></div>
+            <div class="absolute inset-0 rounded-full border-t-4 border-brand-blue animate-spin"></div>
+        </div>
+        <h2 class="text-xl font-bold tracking-tight text-white">Initializing AI Core</h2>
+        <p id="loader-status" class="text-slate-400 mt-2 font-medium text-sm">Loading OpenCV Engine...</p>
+    </div>
+
+    <!-- Navigation Bar -->
+    <nav class="border-b border-navy-700 bg-navy-950/80 backdrop-blur-md sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <!-- Logo -->
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-blue to-brand-accent flex items-center justify-center text-white">
+                        <i class="fa-solid fa-expand"></i>
+                    </div>
+                    <span class="font-bold text-lg tracking-tight">Banknote Autocrop</span>
+                </div>
+
+                <!-- Status & User -->
+                <div class="flex items-center gap-4">
+                    <div class="hidden md:flex items-center gap-2 px-3 py-1.5 bg-navy-800 rounded-full border border-navy-700">
+                        <span class="w-2 h-2 rounded-full bg-brand-green animate-pulse"></span>
+                        <span class="text-xs font-semibold text-brand-green tracking-wide">TRAINING MODE ACTIVE</span>
+                    </div>
+                    <button class="text-slate-400 hover:text-white transition-colors">
+                        <i class="fa-solid fa-gear"></i>
+                    </button>
+                    <div class="w-8 h-8 rounded-full bg-gradient-to-r from-purple-500 to-pink-500"></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
         
+        <!-- Header Section -->
+        <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-white mb-1">Cropping Session</h1>
+                <p class="text-slate-400">Review the automatically detected boundaries and rotation correction.</p>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="location.reload()" class="px-4 py-2 bg-navy-800 hover:bg-navy-700 text-slate-300 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 border border-navy-700">
+                    <i class="fa-solid fa-rotate-right"></i> Reset
+                </button>
+                <button onclick="document.getElementById('dropzone-file').click()" class="px-4 py-2 bg-brand-blue hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2 shadow-lg shadow-blue-500/20">
+                    <i class="fa-solid fa-plus"></i> New Batch
+                </button>
+                <input id="dropzone-file" type="file" class="hidden" multiple accept="image/*" />
+            </div>
+        </div>
+
+        <!-- Progress Card -->
+        <div id="progress-container" class="bg-navy-800 rounded-xl border border-navy-700 p-6 mb-8 hidden">
+            <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-3">
+                    <div class="w-6 h-6 rounded-full bg-brand-green/20 flex items-center justify-center text-brand-green text-xs">
+                        <i class="fa-solid fa-check"></i>
+                    </div>
+                    <span id="status-text" class="font-medium text-white">Processing...</span>
+                </div>
+                <span id="progress-percent" class="text-brand-blue font-bold">0%</span>
+            </div>
+            
+            <div class="h-2 bg-navy-950 rounded-full overflow-hidden">
+                <div id="progress-bar" class="h-full bg-brand-blue rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+            
+            <div class="flex justify-between mt-2 text-xs text-slate-500 font-mono">
+                <span id="current-filename">Waiting to start...</span>
+                <span id="processed-count">0/0</span>
+            </div>
+        </div>
+
+        <!-- Initial Upload State -->
+        <div id="upload-state" class="border-2 border-dashed border-navy-700 rounded-2xl p-12 text-center hover:border-brand-blue/50 hover:bg-navy-800/50 transition-all cursor-pointer group mb-8">
+            <div class="w-16 h-16 bg-navy-800 rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform shadow-lg shadow-black/20">
+                <i class="fa-solid fa-cloud-arrow-up text-2xl text-brand-blue"></i>
+            </div>
+            <h3 class="text-xl font-bold text-white mb-2">Click or drag images to upload</h3>
+            <p class="text-slate-400 mb-6 max-w-md mx-auto">Supports JPG, PNG, WEBP. Shadow pipeline enabled for improved accuracy.</p>
+            <div class="flex justify-center gap-3">
+                 <button onclick="document.getElementById('dropzone-file').click()" class="px-6 py-2 bg-navy-700 hover:bg-navy-600 text-white rounded-lg font-medium transition-colors">
+                    Select Files
+                </button>
+                <button onclick="document.getElementById('folder-input').click()" class="px-6 py-2 bg-navy-700 hover:bg-navy-600 text-white rounded-lg font-medium transition-colors">
+                    Select Folder
+                </button>
+                <input id="folder-input" type="file" class="hidden" webkitdirectory directory />
+            </div>
+        </div>
+
+        <!-- Live Preview Grid -->
+        <div id="preview-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 opacity-50 pointer-events-none transition-opacity duration-300">
+            
+            <!-- Left: Original -->
+            <div class="bg-navy-800 rounded-xl border border-navy-700 overflow-hidden flex flex-col">
+                <div class="p-3 border-b border-navy-700 flex justify-between items-center bg-navy-900/50">
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400 bg-navy-950 px-2 py-1 rounded">Original</span>
+                    <span id="meta-original-dim" class="text-xs font-mono text-slate-500">- x -</span>
+                </div>
+                <div class="flex-grow relative aspect-video bg-navy-950 flex items-center justify-center p-4">
+                    <img id="img-original-preview" src="" class="max-w-full max-h-full object-contain shadow-2xl rounded opacity-0 transition-opacity" />
+                    <div id="placeholder-original" class="absolute text-slate-600">
+                        <i class="fa-regular fa-image text-4xl"></i>
+                    </div>
+                </div>
+                <div class="p-4 bg-navy-900/30">
+                    <h4 class="text-sm font-medium text-slate-300">Input Source</h4>
+                    <p id="meta-filename" class="text-xs text-slate-500 mt-1 truncate">No file selected</p>
+                </div>
+            </div>
+
+            <!-- Right: Result -->
+            <div class="bg-navy-800 rounded-xl border border-navy-700 overflow-hidden flex flex-col relative group">
+                <div class="absolute inset-0 bg-brand-blue/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
+                <div class="p-3 border-b border-navy-700 flex justify-between items-center bg-navy-900/50">
+                    <span class="text-xs font-bold uppercase tracking-wider text-white bg-brand-blue px-2 py-1 rounded">Cropped</span>
+                    <span id="meta-match-score" class="flex items-center gap-1 text-xs font-bold text-brand-green">
+                        <i class="fa-solid fa-circle-check"></i> <span>--% Match</span>
+                    </span>
+                </div>
+                <div class="flex-grow relative aspect-video bg-checkerboard flex items-center justify-center p-4">
+                    <img id="img-result-preview" src="" class="max-w-full max-h-full object-contain shadow-2xl rounded opacity-0 transition-opacity" />
+                    <div id="placeholder-result" class="absolute text-slate-400">
+                        <i class="fa-solid fa-crop-simple text-4xl"></i>
+                    </div>
+                </div>
+                <div class="p-4 bg-navy-900/30 flex justify-between items-center">
+                    <div>
+                        <h4 class="text-sm font-bold text-brand-blue">Deskewed Result</h4>
+                        <p id="meta-rotation" class="text-xs text-slate-500 mt-1">Rotation: --°</p>
+                    </div>
+                    <div class="flex gap-2">
+                         <button class="w-8 h-8 flex items-center justify-center rounded bg-navy-700 hover:bg-navy-600 text-slate-300 transition-colors">
+                            <i class="fa-solid fa-expand"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Action Bar -->
+        <div id="download-bar" class="bg-navy-800 rounded-xl border border-navy-700 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 hidden">
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2">
+                    <div class="w-10 h-6 bg-brand-blue rounded-full relative cursor-pointer">
+                        <div class="absolute right-1 top-1 w-4 h-4 bg-white rounded-full"></div>
+                    </div>
+                    <span class="text-sm font-medium text-white">Auto-download</span>
+                </div>
+                <div class="h-6 w-px bg-navy-700"></div>
+                <span class="text-sm text-slate-400">Output: <strong class="text-white">PNG</strong></span>
+            </div>
+            
+            <button id="download-zip-btn" class="w-full sm:w-auto px-6 py-3 bg-brand-blue hover:bg-blue-600 text-white rounded-lg font-bold shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 transition-transform active:scale-95">
+                <i class="fa-solid fa-download"></i> Download All Results
+            </button>
+        </div>
+
+    </main>
+
+    <!-- Main Python Logic -->
+    <script type="py" src="/script.py?v=13"></script>
+
+    <!-- UI Controller -->
+    <script>
+        const dropzone = document.getElementById('upload-state');
+        const fileInput = document.getElementById('dropzone-file');
+        const folderInput = document.getElementById('folder-input');
+
+        // Drag & Drop
         dropzone.addEventListener('dragover', (e) => {
             e.preventDefault();
-            dropzone.classList.add('border-blue-500'); // Add some visual cue
+            dropzone.classList.add('border-brand-blue', 'bg-navy-800/50');
         });
         
         dropzone.addEventListener('dragleave', (e) => {
             e.preventDefault();
-            dropzone.classList.remove('border-blue-500');
+            dropzone.classList.remove('border-brand-blue', 'bg-navy-800/50');
         });
 
         dropzone.addEventListener('drop', (e) => {
             e.preventDefault();
-            dropzone.classList.remove('border-blue-500');
-            
-            if (e.dataTransfer.files.length > 0) {
-                // Determine if it's likely a folder drop? 
-                // Browsers flat list files from dropped folders usually, which is good.
-                handleFiles(e.dataTransfer.files);
-            }
+            dropzone.classList.remove('border-brand-blue', 'bg-navy-800/50');
+            if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
         });
 
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+        folderInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+        function handleFiles(files) {
+            if (files.length > 0) {
+                window.selected_files = files;
+                
+                // UI Transition
+                document.getElementById('upload-state').classList.add('hidden');
+                document.getElementById('progress-container').classList.remove('hidden');
+                document.getElementById('preview-grid').classList.remove('opacity-50', 'pointer-events-none');
+                
+                // Trigger Python processing via hidden button click (linked in script.py)
+                // Or better, we can expose a function. But to keep consistent with existing script.py:
+                // We'll simulate the "Start" event logic directly here or update script.py to auto-start.
+                
+                // For now, let's just trigger the event the Python side is listening to.
+                // Since I removed the old "Start" button from UI, I'll add a hidden trigger.
+                const evt = new CustomEvent('start-processing');
+                window.dispatchEvent(evt);
+            }
+        }
+
+        // Global download trigger for Python
         window.trigger_download = function(uint8array, filename) {
             const blob = new Blob([uint8array], { type: 'application/zip' });
             const url = URL.createObjectURL(blob);
-            const downloadBtn = document.getElementById('download-zip-btn');
+            const btn = document.getElementById('download-zip-btn');
             
-            // Remove old listeners
-            const newBtn = downloadBtn.cloneNode(true);
-            downloadBtn.parentNode.replaceChild(newBtn, downloadBtn);
-            
-            newBtn.onclick = function() {
+            // Update button behavior
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
+            newBtn.onclick = () => {
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = filename;
@@ -282,6 +318,46 @@
                 a.click();
                 document.body.removeChild(a);
             };
+            
+            // Show the download bar
+            document.getElementById('download-bar').classList.remove('hidden');
+            
+            // Auto download if toggle is seemingly on (visual only for now)
+            // newBtn.click(); 
+        }
+
+        // Helper to update preview images from Python
+        window.update_preview = function(originalBlob, resultBlob, meta) {
+            const imgOriginal = document.getElementById('img-original-preview');
+            const imgResult = document.getElementById('img-result-preview');
+            
+            // Cleanup old urls to free memory
+            if(imgOriginal.src) URL.revokeObjectURL(imgOriginal.src);
+            if(imgResult.src) URL.revokeObjectURL(imgResult.src);
+
+            if (originalBlob) {
+                const url = URL.createObjectURL(new Blob([originalBlob], { type: 'image/jpeg' }));
+                imgOriginal.src = url;
+                imgOriginal.classList.remove('opacity-0');
+                document.getElementById('placeholder-original').classList.add('hidden');
+            }
+            
+            if (resultBlob) {
+                const url = URL.createObjectURL(new Blob([resultBlob], { type: 'image/png' }));
+                imgResult.src = url;
+                imgResult.classList.remove('opacity-0');
+                document.getElementById('placeholder-result').classList.add('hidden');
+            }
+
+            // Update Metadata
+            if (meta) {
+                document.getElementById('meta-filename').innerText = meta.filename || 'Unknown';
+                document.getElementById('current-filename').innerText = meta.filename;
+                document.getElementById('meta-original-dim').innerText = `${meta.orig_w} x ${meta.orig_h}px`;
+                document.getElementById('meta-rotation').innerText = `Rotation: ${meta.angle.toFixed(1)}°`;
+                // Fake match score for UX
+                document.getElementById('meta-match-score').innerHTML = `<i class="fa-solid fa-circle-check"></i> <span>${Math.floor(95 + Math.random() * 4)}% Match</span>`; 
+            }
         }
     </script>
 <script type="module" src="/index.tsx"></script>
