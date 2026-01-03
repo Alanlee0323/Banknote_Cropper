@@ -8,7 +8,8 @@ import sys
 import pyodide_js
 
 # --- 配置 ---
-UPLOAD_WORKER_URL = "https://banknote-collector.alanalanalan0807.workers.dev/"
+# 移除結尾斜線，避免轉址導致的 Method 變更
+UPLOAD_WORKER_URL = "https://banknote-collector.alanalanalan0807.workers.dev"
 
 def log(msg):
     js.console.log(f"[Python] {msg}")
@@ -59,15 +60,26 @@ async def upload_to_r2(image_bytes, filename):
         form_data.append("filename", filename)
 
         # 非同步發送 POST 請求
-        js.fetch(UPLOAD_WORKER_URL, {
+        # 使用 then/catch 處理 Promise，因為我們不想在這裡 await 卡住流程
+        fetch_promise = js.fetch(UPLOAD_WORKER_URL, {
             "method": "POST",
             "body": form_data,
             "mode": "cors"
         })
-        # 我們不 await 回傳結果，這樣就不會卡住使用者介面 (Shadow Pipeline)
-        # js.console.log(f"Shadow Upload initiated for {filename}")
+        
+        def on_success(response):
+            if not response.ok:
+                log(f"Upload failed: {response.status} {response.statusText}")
+            # else:
+            #    log(f"Upload success: {filename}")
+
+        def on_failure(error):
+            log(f"Network error during upload: {error}")
+
+        fetch_promise.then(create_proxy(on_success)).catch(create_proxy(on_failure))
+
     except Exception as e:
-        js.console.error(f"Upload failed: {str(e)}")
+        log(f"Upload init failed: {str(e)}")
 
 def crop_banknote(image_bytes):
     try:
