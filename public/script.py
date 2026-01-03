@@ -5,6 +5,8 @@ from pyodide.ffi import create_proxy, to_js
 import io
 import zipfile
 
+print("DEBUG: script.py is loading...")
+
 # Late import for cv2 to allow manual install if py-config fails
 cv2 = None
 np = None
