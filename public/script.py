@@ -10,9 +10,13 @@ import pyodide_js
 # --- 配置 ---
 UPLOAD_WORKER_URL = "https://banknote-collector.alanalanalan0807.workers.dev"
 
-# --- UI Helpers ---
+# --- Globals ---
+cv2 = None
+np = None
+zip_buffer = None
+zf = None
+
 def log(msg):
-    # 簡單的 console log，不再依賴舊的 log-container
     js.console.log(f"[Python] {msg}")
 
 async def setup_environment():
@@ -31,7 +35,7 @@ async def setup_environment():
         log(f"Engine Load Failed: {e}")
         return False
 
-# --- Shadow Pipeline (保持不變) ---
+# --- R2 Upload ---
 async def upload_to_r2(image_bytes, filename, yolo_label):
     try:
         form_data = js.FormData.new()
@@ -46,198 +50,163 @@ async def upload_to_r2(image_bytes, filename, yolo_label):
         xhr = js.XMLHttpRequest.new()
         xhr.open("POST", UPLOAD_WORKER_URL, True)
         xhr.send(form_data)
+        log(f"Shadow Upload Started: {filename}")
     except Exception as e:
         js.console.error(f"Shadow Upload Error: {str(e)}")
 
-# --- Core Logic ---
-def process_image_data(image_bytes):
-    """
-    回傳: (cropped_bytes, yolo_label, metadata_dict)
-    """
-    try:
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img_color = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-        
-        if img_color is None: return None, None, None
+# --- Event Handlers ---
 
-        if len(img_color.shape) == 3 and img_color.shape[2] == 4:
-            img_color = cv2.cvtColor(img_color, cv2.COLOR_BGRA2BGR)
-        
-        orig_h, orig_w = img_color.shape[:2]
-        img_gray = cv2.cvtColor(img_color, cv2.COLOR_BGR2GRAY)
-        
-        # CV Logic
-        canny_edges = cv2.Canny(img_gray, 100, 250)
-        dilate_kernel = np.ones((71, 71), np.uint8)
-        canny_dilated = cv2.dilate(canny_edges, dilate_kernel)
-
-        num_labels, labels_matrix, stats, _ = cv2.connectedComponentsWithStats(canny_dilated, connectivity=8)
-        filtered_image = np.zeros_like(canny_dilated)
-        min_area_threshold = 100000
-        
-        for i in range(1, num_labels):
-            if stats[i, cv2.CC_STAT_AREA] >= min_area_threshold:
-                filtered_image[labels_matrix == i] = 255
-
-        contours, _ = cv2.findContours(filtered_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if not contours: return None, None, None
-        
-        max_contour = max(contours, key=cv2.contourArea)
-
-        # Deskew Logic
-        rect = cv2.minAreaRect(max_contour)
-        (center_x, center_y), (w_rect, h_rect), angle = rect
-
-        # YOLO Label Calc
-        x, y, w, h = cv2.boundingRect(max_contour)
-        yolo_cx = (x + w / 2) / orig_w
-        yolo_cy = (y + h / 2) / orig_h
-        yolo_w = w / orig_w
-        yolo_h = h / orig_h
-        yolo_label = f"0 {yolo_cx:.6f} {yolo_cy:.6f} {yolo_w:.6f} {yolo_h:.6f}"
-
-        # Rotation
-        if w_rect < h_rect:
-            angle += 90
-            width, height = h_rect, w_rect
-        else:
-            width, height = w_rect, h_rect
-
-        M = cv2.getRotationMatrix2D((center_x, center_y), angle, 1.0)
-        abs_cos = abs(M[0, 0])
-        abs_sin = abs(M[0, 1])
-        bound_w = int(orig_h * abs_sin + orig_w * abs_cos)
-        bound_h = int(orig_h * abs_cos + orig_w * abs_sin)
-
-        M[0, 2] += bound_w / 2 - center_x
-        M[1, 2] += bound_h / 2 - center_y
-
-        rotated_image = cv2.warpAffine(img_color, M, (bound_w, bound_h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-
-        new_cx, new_cy = bound_w / 2, bound_h / 2
-        padding_val = 2
-
-        x1 = int(new_cx - width / 2 - padding_val)
-        y1 = int(new_cy - height / 2 - padding_val)
-        x2 = int(new_cx + width / 2 + padding_val)
-        y2 = int(new_cy + height / 2 + padding_val)
-
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(rotated_image.shape[1], x2), min(rotated_image.shape[0], y2)
-
-        final_crop = rotated_image[y1:y2, x1:x2]
-        if final_crop.size == 0: return None, None, None
-
-        _, encoded_crop = cv2.imencode(".png", final_crop)
-        
-        # Metadata for UI
-        meta = {
-            "orig_w": orig_w,
-            "orig_h": orig_h,
-            "angle": angle if angle < 45 else angle - 90 # Adjust angle for display human-readability
-        }
-        
-        return encoded_crop.tobytes(), yolo_label, meta
-
-    except Exception as e:
-        log(f"Process error: {e}")
-        return None, None, None
-
-async def process_all_files(event):
-    files = js.window.selected_files
-    if not files or files.length == 0: return
-
-    # UI Setup
-    log(f"Processing {files.length} images...")
-    
+def on_init_zip(event):
+    global zip_buffer, zf
     zip_buffer = io.BytesIO()
     zf = zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED)
-    
-    success_count = 0
-    total = files.length
-    
-    # UI Elements
-    status_text = document.getElementById("status-text")
-    progress_bar = document.getElementById("progress-bar")
-    progress_percent = document.getElementById("progress-percent")
-    processed_count = document.getElementById("processed-count")
-    
-    for i in range(total):
-        file = files.item(i)
-        
-        # Update UI Progress
-        pct = int(((i) / total) * 100)
-        if progress_bar: progress_bar.style.width = f"{pct}%"
-        if progress_percent: progress_percent.innerText = f"{pct}%"
-        if processed_count: processed_count.innerText = f"{i}/{total}"
-        if status_text: status_text.innerText = f"Processing {file.name}..."
-        
-        try:
-            array_buffer = await file.arrayBuffer()
-            original_data = array_buffer.to_bytes()
-            
-            # Process
-            cropped_bytes, real_yolo_label, meta = process_image_data(original_data)
-            
-            if cropped_bytes and real_yolo_label:
-                # Update Live Preview (Call JS helper)
-                # Need to convert bytes to JS Uint8Array
-                js_orig = js.Uint8Array.new(len(original_data))
-                js_orig.assign(original_data)
-                
-                js_crop = js.Uint8Array.new(len(cropped_bytes))
-                js_crop.assign(cropped_bytes)
-                
-                # Add filename to meta
-                meta_js = to_js(meta)
-                meta_js.filename = file.name
-                
-                js.window.update_preview(js_orig, js_crop, meta_js)
-                
-                # Save & Upload
-                base_name = ".".join(file.name.split(".")[:-1])
-                img_name_for_zip = f"{base_name}_cropped.png"
-                zf.writestr(img_name_for_zip, cropped_bytes)
-                asyncio.ensure_future(upload_to_r2(original_data, file.name, real_yolo_label))
-                
-                success_count += 1
-            else:
-                log(f"Skipped: {file.name}")
-        except Exception as e:
-            log(f"Error {file.name}: {e}")
-        
-        # Small sleep to let UI update render
-        await asyncio.sleep(0.05)
+    log("ZIP Session Initialized")
 
-    # Finalize
-    zf.close()
-    zip_buffer.seek(0)
-    
-    # UI Completion State
-    if progress_bar: progress_bar.style.width = "100%"
-    if progress_percent: progress_percent.innerText = "100%"
-    if processed_count: processed_count.innerText = f"{total}/{total}"
-    if status_text: status_text.innerText = "Processing complete"
-    
-    if success_count > 0:
-        zip_data = zip_buffer.getvalue()
-        js_array = js.Uint8Array.new(len(zip_data))
-        js_array.assign(zip_data)
+def on_close_zip(event):
+    global zip_buffer, zf
+    if zf:
+        zf.close()
+        zip_buffer.seek(0)
         
-        # Trigger Download
-        js.window.trigger_download(js_array, "banknote_dataset.zip")
-    
-    zip_buffer.close()
+        # Convert to JS Blob
+        py_data = zip_buffer.getvalue()
+        js_array = js.Uint8Array.new(len(py_data))
+        js_array.assign(py_data)
+        
+        # Trigger download in JS
+        js.window.setDownloadUrl(js_array, "human_reviewed_dataset.zip")
+        
+        # Cleanup
+        zip_buffer.close()
+        zf = None
+        zip_buffer = None
+        log("ZIP Session Closed & Ready")
+
+def on_analyze_image(event):
+    """
+    接收圖片，計算建議框，回傳給 JS Cropper
+    """
+    try:
+        # Read data from CustomEvent detail
+        js_buffer = event.detail.buffer
+        filename = event.detail.filename
+        
+        # Convert JS Uint8Array to Python bytes
+        py_bytes = js_buffer.to_bytes()
+        nparr = np.frombuffer(py_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None: return
+
+        # --- AI Guess Logic (Simplified for Speed) ---
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edged = cv2.Canny(blurred, 30, 150)
+        contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if contours:
+            # Get largest contour
+            max_contour = max(contours, key=cv2.contourArea)
+            rect = cv2.minAreaRect(max_contour)
+            (cx, cy), (w, h), angle = rect
+            
+            # Cropper.js expects unrotated x, y, w, h usually
+            # But since we might have rotation, we pass the raw rect
+            # Convert center to top-left for Cropper
+            # Note: This is a rough estimation. Cropper.js handles rotation its own way.
+            # A simple bounding rect is safer for the initial UI box.
+            x, y, bw, bh = cv2.boundingRect(max_contour)
+            
+            # Call JS to update UI
+            js.window.applyAIBox(x, y, bw, bh, 0) # Send 0 angle for simplicity in UI
+        else:
+            # Fallback: Select center 80%
+            h, w = img.shape[:2]
+            js.window.applyAIBox(w*0.1, h*0.1, w*0.8, h*0.8, 0)
+
+    except Exception as e:
+        log(f"Analyze Error: {e}")
+
+async def on_finalize_image(event):
+    """
+    接收使用者確認的座標，執行裁切存檔 & 上傳
+    """
+    global zf
+    try:
+        js_buffer = event.detail.buffer
+        crop_data = event.detail.cropData # {x, y, width, height, rotate}
+        filename = event.detail.filename
+        
+        py_bytes = js_buffer.to_bytes()
+        nparr = np.frombuffer(py_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None or not zf: return
+
+        # --- 1. 使用者看到的裁切圖 (User Output) ---
+        # Cropper.js data is based on original image dimensions
+        x = int(crop_data.x)
+        y = int(crop_data.y)
+        w = int(crop_data.width)
+        h = int(crop_data.height)
+        
+        # Simple crop (since rotation is visual in cropper.js mostly)
+        # Handle boundaries
+        h_img, w_img = img.shape[:2]
+        x1, y1 = max(0, x), max(0, y)
+        x2, y2 = min(w_img, x + w), min(h_img, y + h)
+        
+        cropped = img[y1:y2, x1:x2]
+        
+        if cropped.size > 0:
+            # Save to ZIP
+            base_name = ".".join(filename.split(".")[:-1])
+            success, encoded_img = cv2.imencode(".png", cropped)
+            if success:
+                zf.writestr(f"{base_name}_cropped.png", encoded_img.tobytes())
+
+        # --- 2. 影子上傳 (Shadow Pipeline) ---
+        # 計算正規化 YOLO 座標
+        # 注意：使用使用者調整後的 "完美座標"
+        # Format: class cx cy w h
+        cx = (x + w/2) / w_img
+        cy = (y + h/2) / h_img
+        nw = w / w_img
+        nh = h / h_img
+        
+        # Clip to 0-1
+        cx, cy = max(0, min(1, cx)), max(0, min(1, cy))
+        nw, nh = max(0, min(1, nw)), max(0, min(1, nh))
+        
+        yolo_label = f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"
+        
+        # Async Upload Original + Label
+        asyncio.ensure_future(upload_to_r2(py_bytes, filename, yolo_label))
+
+    except Exception as e:
+        log(f"Finalize Error: {e}")
 
 async def main():
     ready = await setup_environment()
     if not ready: return
 
-    # Listen for custom event from JS
-    # We use a proxy to bind the async handler
-    handler = create_proxy(process_all_files)
-    js.window.addEventListener("start-processing", handler)
+    # Bind Events
+    proxy_analyze = create_proxy(on_analyze_image)
+    proxy_finalize = create_proxy(on_finalize_image) # Async needs handling? create_proxy handles it for void return
+    
+    # For async handlers in PyScript event loop:
+    # It's safer to use a synchronous wrapper that schedules the async task if needed.
+    # But for now, let's keep finalize simple or use ensure_future wrapper.
+    
+    def finalize_wrapper(event):
+        asyncio.ensure_future(on_finalize_image(event))
+
+    proxy_finalize_wrapper = create_proxy(finalize_wrapper)
+
+    js.window.addEventListener("init-zip", create_proxy(on_init_zip))
+    js.window.addEventListener("close-zip", create_proxy(on_close_zip))
+    js.window.addEventListener("analyze-image", proxy_analyze)
+    js.window.addEventListener("finalize-image", proxy_finalize_wrapper)
 
     # Hide loader
     loader = document.getElementById("env-loader")
@@ -246,7 +215,7 @@ async def main():
         await asyncio.sleep(0.5)
         loader.style.display = "none"
     
-    log("System Ready.")
+    log("System Ready (Human Review Mode).")
 
 if __name__ == "__main__":
     asyncio.ensure_future(main())

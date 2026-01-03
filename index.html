@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Banknote Autocrop</title>
+    <title>Banknote Autocrop - Human Review</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -11,6 +11,10 @@
     <!-- FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
+    <!-- Cropper.js (For Human Review) -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+
     <!-- Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
@@ -25,15 +29,16 @@
                     },
                     colors: {
                         navy: {
-                            950: '#0B0F19', // Darkest background
+                            950: '#0B0F19', 
                             900: '#0f172a',
-                            800: '#151B2D', // Card bg
-                            700: '#1e293b', // Borders/Hover
+                            800: '#151B2D', 
+                            700: '#1e293b', 
                         },
                         brand: {
                             blue: '#3b82f6',
                             green: '#10b981',
                             accent: '#6366f1',
+                            danger: '#ef4444',
                         }
                     }
                 }
@@ -41,48 +46,25 @@
         }
     </script>
     
-    <!-- PyScript Configuration -->
     <script type="py-config">
-        {
-            "packages": []
-        }
+        { "packages": [] }
     </script>
-
-    <!-- PyScript & Pyodide -->
     <link rel="stylesheet" href="https://pyscript.net/releases/2024.6.1/core.css" />
     <script type="module" src="https://pyscript.net/releases/2024.6.1/core.js"></script>
 
     <style>
-        /* Custom Scrollbar for Logs */
-        ::-webkit-scrollbar {
-            width: 8px;
+        .cropper-view-box,
+        .cropper-face {
+            border-radius: 0; /* Banknotes are rectangles */
         }
-        ::-webkit-scrollbar-track {
-            background: #151B2D; 
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #334155; 
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #475569; 
-        }
-
-        /* Checkerboard background for transparency */
-        .bg-checkerboard {
-            background-color: #e5e5f7;
-            background-image:  linear-gradient(45deg, #f4f4f5 25%, transparent 25%), linear-gradient(-45deg, #f4f4f5 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f4f4f5 75%), linear-gradient(-45deg, transparent 75%, #f4f4f5 75%);
-            background-size: 20px 20px;
-            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
-        }
-
+        /* Custom Loading */
         .loading-overlay {
             backdrop-filter: blur(8px);
             background-color: rgba(11, 15, 25, 0.9);
         }
     </style>
 </head>
-<body class="bg-navy-950 text-slate-200 min-h-screen flex flex-col font-sans antialiased selection:bg-brand-blue selection:text-white">
+<body class="bg-navy-950 text-slate-200 min-h-screen flex flex-col font-sans antialiased">
 
     <!-- Loading Overlay -->
     <div id="env-loader" class="fixed inset-0 z-50 flex flex-col items-center justify-center transition-opacity duration-500 loading-overlay">
@@ -94,272 +76,281 @@
         <p id="loader-status" class="text-slate-400 mt-2 font-medium text-sm">Loading OpenCV Engine...</p>
     </div>
 
-    <!-- Navigation Bar -->
+    <!-- Nav -->
     <nav class="border-b border-navy-700 bg-navy-950/80 backdrop-blur-md sticky top-0 z-40">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-16">
-                <!-- Logo -->
                 <div class="flex items-center gap-3">
                     <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-blue to-brand-accent flex items-center justify-center text-white">
-                        <i class="fa-solid fa-expand"></i>
+                        <i class="fa-solid fa-layer-group"></i>
                     </div>
-                    <span class="font-bold text-lg tracking-tight">Banknote Autocrop</span>
+                    <span class="font-bold text-lg tracking-tight">Review Mode</span>
                 </div>
-
-                <!-- Status & User -->
                 <div class="flex items-center gap-4">
-                    <div class="hidden md:flex items-center gap-2 px-3 py-1.5 bg-navy-800 rounded-full border border-navy-700">
-                        <span class="w-2 h-2 rounded-full bg-brand-green animate-pulse"></span>
-                        <span class="text-xs font-semibold text-brand-green tracking-wide">TRAINING MODE ACTIVE</span>
+                    <div id="queue-counter" class="hidden md:flex items-center gap-2 px-3 py-1.5 bg-navy-800 rounded-full border border-navy-700">
+                        <span class="text-xs font-semibold text-slate-300 tracking-wide">PENDING: <span id="pending-count" class="text-white font-bold">0</span></span>
                     </div>
-                    <button class="text-slate-400 hover:text-white transition-colors">
-                        <i class="fa-solid fa-gear"></i>
-                    </button>
-                    <div class="w-8 h-8 rounded-full bg-gradient-to-r from-purple-500 to-pink-500"></div>
                 </div>
             </div>
         </div>
     </nav>
 
     <!-- Main Content -->
-    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
-        
-        <!-- Header Section -->
-        <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
-            <div>
-                <h1 class="text-3xl font-bold text-white mb-1">Cropping Session</h1>
-                <p class="text-slate-400">Review the automatically detected boundaries and rotation correction.</p>
+    <main class="flex-grow max-w-5xl mx-auto px-4 py-8 w-full flex flex-col h-full">
+
+        <!-- Upload State -->
+        <div id="upload-state" class="border-2 border-dashed border-navy-700 rounded-2xl p-12 text-center hover:border-brand-blue/50 hover:bg-navy-800/50 transition-all cursor-pointer group mb-8">
+            <div class="w-16 h-16 bg-navy-800 rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform shadow-lg shadow-black/20">
+                <i class="fa-solid fa-images text-2xl text-brand-blue"></i>
             </div>
-            <div class="flex gap-3">
-                <button onclick="location.reload()" class="px-4 py-2 bg-navy-800 hover:bg-navy-700 text-slate-300 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 border border-navy-700">
-                    <i class="fa-solid fa-rotate-right"></i> Reset
-                </button>
-                <button onclick="document.getElementById('dropzone-file').click()" class="px-4 py-2 bg-brand-blue hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2 shadow-lg shadow-blue-500/20">
-                    <i class="fa-solid fa-plus"></i> New Batch
-                </button>
+            <h3 class="text-xl font-bold text-white mb-2">Upload for Human Review</h3>
+            <p class="text-slate-400 mb-6 max-w-md mx-auto">Verify and adjust AI crops before processing.</p>
+            <div class="flex justify-center gap-3">
+                 <button onclick="document.getElementById('dropzone-file').click()" class="px-6 py-2 bg-navy-700 hover:bg-navy-600 text-white rounded-lg font-medium">Select Files</button>
                 <input id="dropzone-file" type="file" class="hidden" multiple accept="image/*" />
             </div>
         </div>
 
-        <!-- Progress Card -->
-        <div id="progress-container" class="bg-navy-800 rounded-xl border border-navy-700 p-6 mb-8 hidden">
-            <div class="flex items-center justify-between mb-2">
-                <div class="flex items-center gap-3">
-                    <div class="w-6 h-6 rounded-full bg-brand-green/20 flex items-center justify-center text-brand-green text-xs">
-                        <i class="fa-solid fa-check"></i>
-                    </div>
-                    <span id="status-text" class="font-medium text-white">Processing...</span>
+        <!-- Editor Container (Hidden initially) -->
+        <div id="editor-container" class="hidden flex-grow flex flex-col">
+            
+            <!-- Toolbar -->
+            <div class="flex justify-between items-center mb-4">
+                <h2 id="current-filename" class="text-lg font-medium text-white truncate max-w-md">filename.jpg</h2>
+                <div class="flex gap-2">
+                    <button onclick="rotateImage(-90)" class="w-10 h-10 rounded bg-navy-800 hover:bg-navy-700 text-slate-300" title="Rotate Left">
+                        <i class="fa-solid fa-rotate-left"></i>
+                    </button>
+                    <button onclick="rotateImage(90)" class="w-10 h-10 rounded bg-navy-800 hover:bg-navy-700 text-slate-300" title="Rotate Right">
+                        <i class="fa-solid fa-rotate-right"></i>
+                    </button>
+                    <button onclick="resetCrop()" class="w-10 h-10 rounded bg-navy-800 hover:bg-navy-700 text-brand-blue" title="Reset AI Crop">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    </button>
                 </div>
-                <span id="progress-percent" class="text-brand-blue font-bold">0%</span>
             </div>
-            
-            <div class="h-2 bg-navy-950 rounded-full overflow-hidden">
-                <div id="progress-bar" class="h-full bg-brand-blue rounded-full transition-all duration-300" style="width: 0%"></div>
+
+            <!-- Image Area -->
+            <div class="relative bg-navy-900 rounded-xl border border-navy-700 overflow-hidden flex-grow shadow-2xl" style="min-height: 500px; max-height: 70vh;">
+                <img id="editor-image" src="" class="max-w-full h-auto opacity-0" />
+                
+                <!-- AI Thinking Overlay -->
+                <div id="ai-analyzing" class="absolute inset-0 z-20 bg-navy-950/80 flex flex-col items-center justify-center hidden">
+                    <div class="w-12 h-12 border-4 border-brand-blue border-t-transparent rounded-full animate-spin mb-4"></div>
+                    <p class="text-brand-blue font-bold animate-pulse">AI Analyzing...</p>
+                </div>
             </div>
-            
-            <div class="flex justify-between mt-2 text-xs text-slate-500 font-mono">
-                <span id="current-filename">Waiting to start...</span>
-                <span id="processed-count">0/0</span>
+
+            <!-- Footer Controls -->
+            <div class="mt-6 flex justify-between items-center">
+                <div class="text-sm text-slate-500">
+                    Step <span id="current-step" class="text-white font-bold">1</span> of <span id="total-step">?</span>
+                </div>
+                
+                <div class="flex gap-4">
+                    <button onclick="skipImage()" class="px-6 py-3 rounded-lg border border-navy-700 text-slate-400 hover:text-white hover:bg-navy-800 transition-colors font-medium">
+                        Skip
+                    </button>
+                    <button id="approve-btn" onclick="approveAndNext()" class="px-8 py-3 rounded-lg bg-brand-green hover:bg-green-600 text-white shadow-lg shadow-green-500/20 font-bold flex items-center gap-2 transition-transform active:scale-95">
+                        <i class="fa-solid fa-check"></i> Approve & Next
+                    </button>
+                </div>
             </div>
         </div>
 
-        <!-- Initial Upload State -->
-        <div id="upload-state" class="border-2 border-dashed border-navy-700 rounded-2xl p-12 text-center hover:border-brand-blue/50 hover:bg-navy-800/50 transition-all cursor-pointer group mb-8">
-            <div class="w-16 h-16 bg-navy-800 rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform shadow-lg shadow-black/20">
-                <i class="fa-solid fa-cloud-arrow-up text-2xl text-brand-blue"></i>
+        <!-- Finish Screen -->
+        <div id="finish-screen" class="hidden text-center py-12">
+            <div class="w-24 h-24 mx-auto rounded-full bg-brand-green/20 flex items-center justify-center text-brand-green mb-6 text-4xl">
+                <i class="fa-solid fa-flag-checkered"></i>
             </div>
-            <h3 class="text-xl font-bold text-white mb-2">Click or drag images to upload</h3>
-            <p class="text-slate-400 mb-6 max-w-md mx-auto">Supports JPG, PNG, WEBP. Shadow pipeline enabled for improved accuracy.</p>
-            <div class="flex justify-center gap-3">
-                 <button onclick="document.getElementById('dropzone-file').click()" class="px-6 py-2 bg-navy-700 hover:bg-navy-600 text-white rounded-lg font-medium transition-colors">
-                    Select Files
-                </button>
-                <button onclick="document.getElementById('folder-input').click()" class="px-6 py-2 bg-navy-700 hover:bg-navy-600 text-white rounded-lg font-medium transition-colors">
-                    Select Folder
-                </button>
-                <input id="folder-input" type="file" class="hidden" webkitdirectory directory />
-            </div>
-        </div>
-
-        <!-- Live Preview Grid -->
-        <div id="preview-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 opacity-50 pointer-events-none transition-opacity duration-300">
-            
-            <!-- Left: Original -->
-            <div class="bg-navy-800 rounded-xl border border-navy-700 overflow-hidden flex flex-col">
-                <div class="p-3 border-b border-navy-700 flex justify-between items-center bg-navy-900/50">
-                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400 bg-navy-950 px-2 py-1 rounded">Original</span>
-                    <span id="meta-original-dim" class="text-xs font-mono text-slate-500">- x -</span>
-                </div>
-                <div class="flex-grow relative aspect-video bg-navy-950 flex items-center justify-center p-4">
-                    <img id="img-original-preview" src="" class="max-w-full max-h-full object-contain shadow-2xl rounded opacity-0 transition-opacity" />
-                    <div id="placeholder-original" class="absolute text-slate-600">
-                        <i class="fa-regular fa-image text-4xl"></i>
-                    </div>
-                </div>
-                <div class="p-4 bg-navy-900/30">
-                    <h4 class="text-sm font-medium text-slate-300">Input Source</h4>
-                    <p id="meta-filename" class="text-xs text-slate-500 mt-1 truncate">No file selected</p>
-                </div>
-            </div>
-
-            <!-- Right: Result -->
-            <div class="bg-navy-800 rounded-xl border border-navy-700 overflow-hidden flex flex-col relative group">
-                <div class="absolute inset-0 bg-brand-blue/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
-                <div class="p-3 border-b border-navy-700 flex justify-between items-center bg-navy-900/50">
-                    <span class="text-xs font-bold uppercase tracking-wider text-white bg-brand-blue px-2 py-1 rounded">Cropped</span>
-                    <span id="meta-match-score" class="flex items-center gap-1 text-xs font-bold text-brand-green">
-                        <i class="fa-solid fa-circle-check"></i> <span>--% Match</span>
-                    </span>
-                </div>
-                <div class="flex-grow relative aspect-video bg-checkerboard flex items-center justify-center p-4">
-                    <img id="img-result-preview" src="" class="max-w-full max-h-full object-contain shadow-2xl rounded opacity-0 transition-opacity" />
-                    <div id="placeholder-result" class="absolute text-slate-400">
-                        <i class="fa-solid fa-crop-simple text-4xl"></i>
-                    </div>
-                </div>
-                <div class="p-4 bg-navy-900/30 flex justify-between items-center">
-                    <div>
-                        <h4 class="text-sm font-bold text-brand-blue">Deskewed Result</h4>
-                        <p id="meta-rotation" class="text-xs text-slate-500 mt-1">Rotation: --°</p>
-                    </div>
-                    <div class="flex gap-2">
-                         <button class="w-8 h-8 flex items-center justify-center rounded bg-navy-700 hover:bg-navy-600 text-slate-300 transition-colors">
-                            <i class="fa-solid fa-expand"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-        </div>
-
-        <!-- Action Bar -->
-        <div id="download-bar" class="bg-navy-800 rounded-xl border border-navy-700 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 hidden">
-            <div class="flex items-center gap-4">
-                <div class="flex items-center gap-2">
-                    <div class="w-10 h-6 bg-brand-blue rounded-full relative cursor-pointer">
-                        <div class="absolute right-1 top-1 w-4 h-4 bg-white rounded-full"></div>
-                    </div>
-                    <span class="text-sm font-medium text-white">Auto-download</span>
-                </div>
-                <div class="h-6 w-px bg-navy-700"></div>
-                <span class="text-sm text-slate-400">Output: <strong class="text-white">PNG</strong></span>
-            </div>
-            
-            <button id="download-zip-btn" class="w-full sm:w-auto px-6 py-3 bg-brand-blue hover:bg-blue-600 text-white rounded-lg font-bold shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 transition-transform active:scale-95">
-                <i class="fa-solid fa-download"></i> Download All Results
+            <h2 class="text-3xl font-bold text-white mb-4">Session Complete!</h2>
+            <p class="text-slate-400 mb-8">You have reviewed <span id="final-count" class="text-white font-bold">0</span> images.</p>
+            <button id="download-final-btn" class="px-8 py-4 bg-brand-blue hover:bg-blue-600 text-white rounded-full font-bold shadow-xl shadow-blue-500/20 text-lg">
+                <i class="fa-solid fa-download mr-2"></i> Download ZIP
             </button>
+            <p class="mt-6">
+                <a href="#" onclick="location.reload()" class="text-slate-500 hover:text-white text-sm">Start New Session</a>
+            </p>
         </div>
 
     </main>
 
-    <!-- Main Python Logic -->
-    <script type="py" src="/script.py?v=13"></script>
-
-    <!-- UI Controller -->
+    <!-- JS Logic -->
     <script>
-        const dropzone = document.getElementById('upload-state');
+        let cropper = null;
+        let fileQueue = [];
+        let currentFileIndex = -1;
+        let processedResults = []; // Store {filename, blob} for ZIP
+        let zipBlob = null;
+
         const fileInput = document.getElementById('dropzone-file');
-        const folderInput = document.getElementById('folder-input');
-
-        // Drag & Drop
-        dropzone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropzone.classList.add('border-brand-blue', 'bg-navy-800/50');
-        });
         
-        dropzone.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            dropzone.classList.remove('border-brand-blue', 'bg-navy-800/50');
-        });
-
-        dropzone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            dropzone.classList.remove('border-brand-blue', 'bg-navy-800/50');
-            if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
-        });
-
-        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
-        folderInput.addEventListener('change', (e) => handleFiles(e.target.files));
-
-        function handleFiles(files) {
-            if (files.length > 0) {
-                window.selected_files = files;
-                
-                // UI Transition
-                document.getElementById('upload-state').classList.add('hidden');
-                document.getElementById('progress-container').classList.remove('hidden');
-                document.getElementById('preview-grid').classList.remove('opacity-50', 'pointer-events-none');
-                
-                // Trigger Python processing via hidden button click (linked in script.py)
-                // Or better, we can expose a function. But to keep consistent with existing script.py:
-                // We'll simulate the "Start" event logic directly here or update script.py to auto-start.
-                
-                // For now, let's just trigger the event the Python side is listening to.
-                // Since I removed the old "Start" button from UI, I'll add a hidden trigger.
-                const evt = new CustomEvent('start-processing');
-                window.dispatchEvent(evt);
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                fileQueue = Array.from(e.target.files);
+                startReviewSession();
             }
+        });
+
+        function startReviewSession() {
+            document.getElementById('upload-state').classList.add('hidden');
+            document.getElementById('editor-container').classList.remove('hidden');
+            document.getElementById('queue-counter').classList.remove('hidden');
+            document.getElementById('total-step').innerText = fileQueue.length;
+            
+            // Start Python ZIP engine
+            window.dispatchEvent(new CustomEvent('init-zip'));
+
+            loadNextImage();
         }
 
-        // Global download trigger for Python
-        window.trigger_download = function(uint8array, filename) {
+        async function loadNextImage() {
+            currentFileIndex++;
+            
+            if (currentFileIndex >= fileQueue.length) {
+                finishSession();
+                return;
+            }
+
+            // Update UI
+            document.getElementById('pending-count').innerText = fileQueue.length - currentFileIndex;
+            document.getElementById('current-step').innerText = currentFileIndex + 1;
+            document.getElementById('current-filename').innerText = fileQueue[currentFileIndex].name;
+            document.getElementById('ai-analyzing').classList.remove('hidden'); // Show loading
+            
+            const file = fileQueue[currentFileIndex];
+            const url = URL.createObjectURL(file);
+            const img = document.getElementById('editor-image');
+            
+            // Reset Cropper if exists
+            if (cropper) {
+                cropper.destroy();
+                cropper = null;
+            }
+
+            img.src = url;
+            img.onload = () => {
+                // Initialize Cropper (Disabled initially until AI analyzes)
+                cropper = new Cropper(img, {
+                    viewMode: 1,
+                    dragMode: 'move',
+                    autoCropArea: 0.5,
+                    restore: false,
+                    guides: true,
+                    center: true,
+                    highlight: false,
+                    cropBoxMovable: true,
+                    cropBoxResizable: true,
+                    toggleDragModeOnDblclick: false,
+                });
+                
+                // Ask Python to analyze
+                file.arrayBuffer().then(buffer => {
+                    // Send to Python
+                    const event = new CustomEvent('analyze-image', { 
+                        detail: { 
+                            buffer: new Uint8Array(buffer),
+                            filename: file.name
+                        } 
+                    });
+                    window.dispatchEvent(event);
+                });
+            };
+        }
+
+        // Callback from Python with AI suggested crop
+        window.applyAIBox = function(x, y, w, h, angle) {
+            document.getElementById('ai-analyzing').classList.add('hidden');
+            
+            if (cropper) {
+                // If angle is significant, rotate image first
+                // Note: Cropper.js rotation might change coordinate space, simpler to just set box for now
+                if (Math.abs(angle) > 1) {
+                    cropper.rotate(angle);
+                }
+                
+                // Set Crop Box (Need to convert if rotated? Let's assume Py returns raw rect relative to original)
+                // Cropper.js setData expects natural image coordinates
+                cropper.setData({
+                    x: x,
+                    y: y,
+                    width: w,
+                    height: h
+                });
+            }
+        };
+
+        async function approveAndNext() {
+            if (!cropper) return;
+            
+            // Get final data
+            // We get the cropped canvas directly from Cropper.js for simplicity
+            // But to support "Shadow Upload" of ORIGINAL + COORDS, we need the data.
+            const data = cropper.getData(); // {x, y, width, height, rotate}
+            
+            // 1. Get Cropped Blob for User ZIP
+            cropper.getCroppedCanvas({
+                imageSmoothingQuality: 'high'
+            }).toBlob(async (blob) => {
+                // Send to Python to add to ZIP and Shadow Upload
+                // We need to pass the ORIGINAL buffer again or keep it in Py? 
+                // Better: Pass the crop blob to Py to save, and Py has the original in memory? 
+                // No, Py memory is volatile per call. 
+                // Let's send the *Crop Info* back to Py, and let Py do the heavy lifting (re-read original).
+                
+                const file = fileQueue[currentFileIndex];
+                const buffer = await file.arrayBuffer();
+                
+                const event = new CustomEvent('finalize-image', {
+                    detail: {
+                        buffer: new Uint8Array(buffer),
+                        filename: file.name,
+                        cropData: data // {x, y, width, height, rotate} from CropperJS
+                    }
+                });
+                window.dispatchEvent(event);
+
+                loadNextImage();
+            }, 'image/png');
+        }
+
+        function skipImage() {
+            loadNextImage();
+        }
+        
+        function rotateImage(deg) {
+            if(cropper) cropper.rotate(deg);
+        }
+        
+        function resetCrop() {
+            if(cropper) cropper.reset();
+        }
+
+        function finishSession() {
+            document.getElementById('editor-container').classList.add('hidden');
+            document.getElementById('finish-screen').classList.remove('hidden');
+            document.getElementById('final-count').innerText = currentFileIndex;
+            
+            // Trigger Python to close ZIP
+            window.dispatchEvent(new CustomEvent('close-zip'));
+        }
+        
+        // Python calls this when ZIP is ready
+        window.setDownloadUrl = function(uint8array, filename) {
             const blob = new Blob([uint8array], { type: 'application/zip' });
             const url = URL.createObjectURL(blob);
-            const btn = document.getElementById('download-zip-btn');
-            
-            // Update button behavior
-            const newBtn = btn.cloneNode(true);
-            btn.parentNode.replaceChild(newBtn, btn);
-            newBtn.onclick = () => {
+            const btn = document.getElementById('download-final-btn');
+            btn.onclick = () => {
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = filename;
                 document.body.appendChild(a);
                 a.click();
-                document.body.removeChild(a);
             };
-            
-            // Show the download bar
-            document.getElementById('download-bar').classList.remove('hidden');
-            
-            // Auto download if toggle is seemingly on (visual only for now)
-            // newBtn.click(); 
-        }
-
-        // Helper to update preview images from Python
-        window.update_preview = function(originalBlob, resultBlob, meta) {
-            const imgOriginal = document.getElementById('img-original-preview');
-            const imgResult = document.getElementById('img-result-preview');
-            
-            // Cleanup old urls to free memory
-            if(imgOriginal.src) URL.revokeObjectURL(imgOriginal.src);
-            if(imgResult.src) URL.revokeObjectURL(imgResult.src);
-
-            if (originalBlob) {
-                const url = URL.createObjectURL(new Blob([originalBlob], { type: 'image/jpeg' }));
-                imgOriginal.src = url;
-                imgOriginal.classList.remove('opacity-0');
-                document.getElementById('placeholder-original').classList.add('hidden');
-            }
-            
-            if (resultBlob) {
-                const url = URL.createObjectURL(new Blob([resultBlob], { type: 'image/png' }));
-                imgResult.src = url;
-                imgResult.classList.remove('opacity-0');
-                document.getElementById('placeholder-result').classList.add('hidden');
-            }
-
-            // Update Metadata
-            if (meta) {
-                document.getElementById('meta-filename').innerText = meta.filename || 'Unknown';
-                document.getElementById('current-filename').innerText = meta.filename;
-                document.getElementById('meta-original-dim').innerText = `${meta.orig_w} x ${meta.orig_h}px`;
-                document.getElementById('meta-rotation').innerText = `Rotation: ${meta.angle.toFixed(1)}°`;
-                // Fake match score for UX
-                document.getElementById('meta-match-score').innerHTML = `<i class="fa-solid fa-circle-check"></i> <span>${Math.floor(95 + Math.random() * 4)}% Match</span>`; 
-            }
         }
     </script>
-<script type="module" src="/index.tsx"></script>
+    
+    <!-- Python Script -->
+    <script type="py" src="/script.py?v=14"></script>
 </body>
 </html>
