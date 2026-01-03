@@ -13,6 +13,7 @@ np = None
 
 async def ensure_dependencies():
     global cv2, np
+    loader_status = document.getElementById("loader-status")
     try:
         import cv2 as _cv2
         import numpy as _np
@@ -20,12 +21,17 @@ async def ensure_dependencies():
         np = _np
     except ImportError:
         import micropip
+        if loader_status:
+            loader_status.innerText = "Downloading OpenCV Engine (~30MB)..."
         print("Installing opencv-python...")
         await micropip.install("opencv-python")
         import cv2 as _cv2
         import numpy as _np
         cv2 = _cv2
         np = _np
+    
+    if loader_status:
+        loader_status.innerText = "Finalizing..."
     print("Dependencies loaded successfully")
 
 # --- UI Helpers ---
