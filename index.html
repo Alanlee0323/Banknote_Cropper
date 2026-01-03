@@ -45,42 +45,16 @@
         }
     </script>
     
-    <!-- PyScript & Pyodide -->
-    <link rel="stylesheet" href="https://pyscript.net/releases/2024.6.1/core.css" />
-    <script type="module" src="https://pyscript.net/releases/2024.6.1/core.js"></script>
-    
-    <!-- Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-
-    <style>
-        body {
-            background-color: #E0E5EC;
-        }
-        .progress-bar-striped {
-            background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent);
-            background-size: 1rem 1rem;
-            animation: progress-bar-stripes 1s linear infinite;
-        }
-        @keyframes progress-bar-stripes {
-            0% { background-position: 1rem 0; }
-            100% { background-position: 0 0; }
-        }
-        .loading-overlay {
-            backdrop-filter: blur(10px);
-            background-color: rgba(224, 229, 236, 0.8);
-        }
-        
-        /* PyScript loading adjustments */
-        .py-overlay { display: none; }
-    </style>
-
-    <!-- Configuration for PyScript (Moved to Head for Priority) -->
+    <!-- Configuration for PyScript -->
     <script type="py-config">
         {
             "packages": ["micropip", "opencv-python"]
         }
     </script>
+
+    <!-- PyScript & Pyodide -->
+    <link rel="stylesheet" href="https://pyscript.net/releases/2024.6.1/core.css" />
+    <script type="module" src="https://pyscript.net/releases/2024.6.1/core.js"></script>
 </head>
 <body class="text-slate-800 min-h-screen flex flex-col font-sans antialiased">
 

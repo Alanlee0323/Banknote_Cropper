@@ -2,10 +2,29 @@ import asyncio
 import js
 from pyscript import document, display
 from pyodide.ffi import create_proxy, to_js
-import cv2
-import numpy as np
 import io
 import zipfile
+
+# Late import for cv2 to allow manual install if py-config fails
+cv2 = None
+np = None
+
+async def ensure_dependencies():
+    global cv2, np
+    try:
+        import cv2 as _cv2
+        import numpy as _np
+        cv2 = _cv2
+        np = _np
+    except ImportError:
+        import micropip
+        print("Installing opencv-python...")
+        await micropip.install("opencv-python")
+        import cv2 as _cv2
+        import numpy as _np
+        cv2 = _cv2
+        np = _np
+    print("Dependencies loaded successfully")
 
 # --- UI Helpers ---
 
@@ -23,7 +42,7 @@ def log_to_ui(message, is_error=False):
 
 def update_progress(current, total, status_msg=""):
     """Updates the progress bar and status text."""
-    percentage = int((current / total) * 100)
+    percentage = int((current / total) * 100) if total > 0 else 0
     
     progress_bar = document.getElementById("progress-bar")
     progress_text = document.getElementById("progress-text")
@@ -56,8 +75,10 @@ def crop_banknote(image_bytes):
     """
     Decodes an image from bytes, finds the largest contour (assumed banknote),
     and returns the cropped image encoded as PNG bytes.
-    Returns None if no valid contour is found or error occurs.
     """
+    if cv2 is None or np is None:
+        return None
+        
     try:
         # Decode image
         nparr = np.frombuffer(image_bytes, np.uint8)
@@ -72,11 +93,7 @@ def crop_banknote(image_bytes):
         # Blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Edge detection (Canny) - Auto threshold might be better but let's try standard first
-        # Or simple thresholding
-        # _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Canny is often robust for banknotes
+        # Canny edge detection
         edged = cv2.Canny(blurred, 30, 150)
         
         # Find contours
@@ -92,10 +109,10 @@ def crop_banknote(image_bytes):
         # Get bounding box
         x, y, w, h = cv2.boundingRect(largest_contour)
         
-        # Filter small noise (if the largest thing is tiny, it's probably not a banknote)
+        # Filter small noise
         img_h, img_w = img.shape[:2]
         if w < img_w * 0.1 or h < img_h * 0.1:
-            return None # Too small
+            return None
 
         # Crop
         cropped = img[y:y+h, x:x+w]
@@ -111,7 +128,11 @@ def crop_banknote(image_bytes):
 async def process_images(event):
     """Main event handler for processing."""
     
-    # 1. Setup UI
+    # Ensure deps are loaded (if click happens fast)
+    if cv2 is None:
+        log_to_ui("Waiting for dependencies to initialize...")
+        await ensure_dependencies()
+
     files = js.window.selected_files
     if not files or files.length == 0:
         log_to_ui("No files selected!", is_error=True)
@@ -121,9 +142,7 @@ async def process_images(event):
     total_files = files.length
     log_to_ui(f"Starting processing of {total_files} files...")
     
-    # Prepare ZIP in memory
     zip_buffer = io.BytesIO()
-    
     success_count = 0
     
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -134,68 +153,54 @@ async def process_images(event):
             update_progress(i, total_files, f"Processing {file_name}...")
             
             try:
-                # Read file content from JS
                 array_buffer = await file.arrayBuffer()
-                # Convert JS ArrayBuffer to Python bytes
                 data = array_buffer.to_bytes()
                 
-                # Process
                 cropped_bytes = crop_banknote(data)
                 
                 if cropped_bytes:
-                    # Use original name or add suffix
-                    # Let's clean the name: remove extension, add .png
                     base_name = ".".join(file_name.split(".")[:-1])
                     new_name = f"{base_name}_cropped.png"
-                    
                     zip_file.writestr(new_name, cropped_bytes)
                     success_count += 1
                     log_to_ui(f"Cropped: {file_name}")
                 else:
-                    log_to_ui(f"Skipped (No banknote found): {file_name}")
+                    log_to_ui(f"Skipped: {file_name}")
                     
             except Exception as e:
                 log_to_ui(f"Error processing {file_name}: {str(e)}", is_error=True)
             
-            # Yield control to UI loop
             await asyncio.sleep(0.01)
 
     update_progress(total_files, total_files, "Finalizing ZIP archive...")
     
-    # 2. Trigger Download
     if success_count > 0:
         log_to_ui(f"Processing complete. {success_count}/{total_files} images cropped.")
-        
-        # Prepare final ZIP bytes
         zip_data = zip_buffer.getvalue()
-        
-        # Create JS Uint8Array from Python bytes
         js_array = js.Uint8Array.new(len(zip_data))
         js_array.assign(zip_data)
         
-        # Update Done Section
         document.getElementById("success-count").innerText = str(success_count)
         show_section("download-section")
-        
-        # Hook up the JS download trigger
         js.window.trigger_download(js_array, "cropped_banknotes.zip")
-        
     else:
-        log_to_ui("Processing finished but no images were successfully cropped.", is_error=True)
-        # Maybe show an error state or let them go back?
-        # For now, just show download section but maybe with 0 count
+        log_to_ui("No images were successfully cropped.", is_error=True)
         document.getElementById("success-count").innerText = "0"
         show_section("download-section")
 
 # --- Initialization ---
 
-def setup():
+async def main():
+    # 1. Load dependencies first
+    await ensure_dependencies()
+    
+    # 2. Setup event listeners
     start_btn = document.getElementById("start-btn")
     if start_btn:
         on_click_proxy = create_proxy(process_images)
         start_btn.addEventListener("click", on_click_proxy)
     
-    # Signal readiness
+    # 3. Hide loader
     loader = document.getElementById("env-loader")
     if loader:
         loader.style.display = "none"
@@ -203,4 +208,6 @@ def setup():
     log_to_ui("System Ready (OpenCV loaded)")
 
 if __name__ == "__main__":
-    setup()
+    # In PyScript, we can use top-level await if it's a module, 
+    # but here we'll use asyncio to run the main coro.
+    asyncio.ensure_future(main())
