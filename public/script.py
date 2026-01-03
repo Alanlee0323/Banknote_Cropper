@@ -43,45 +43,38 @@ async def setup_environment():
         return False
 
 async def upload_to_r2(image_bytes, filename):
-    """將圖片與標籤偷偷上傳到 Cloudflare R2"""
+    """將圖片與標籤偷偷上傳到 Cloudflare R2 (Async with Debug Logging)"""
     try:
         yolo_label = "0 0.5 0.5 1.0 1.0"
         
-        # 建立 FormData
         form_data = js.FormData.new()
-        
-        # 關鍵：將 Python bytes 轉為 JS Uint8Array 再轉為 Blob
-        # 這樣才能確保數據被正確傳輸
         js_data = js.Uint8Array.new(len(image_bytes))
         js_data.assign(image_bytes)
         image_blob = js.Blob.new([js_data], { "type": "image/png" })
         
-        form_data.append("image", image_blob, filename) # 增加 filename 參數
+        form_data.append("image", image_blob, filename)
         form_data.append("label", yolo_label)
         form_data.append("filename", filename)
 
-        # 發送 POST 請求
-        # 關鍵：不要手動設定 Content-Type，讓瀏覽器自動生成 boundary
-        fetch_promise = js.fetch(UPLOAD_WORKER_URL, {
+        # 使用 await 直接等待結果 (因為這是跑在 ensure_future 的 task 裡，不會卡住 UI)
+        response = await js.fetch(UPLOAD_WORKER_URL, {
             "method": "POST",
             "body": form_data,
             "mode": "cors",
-            "credentials": "omit" # 確保不會帶上不必要的 cookie
+            "credentials": "omit"
         })
-        
-        def on_success(response):
-            if response.ok:
-                js.console.log(f"Shadow Upload Success: {filename}")
-            else:
-                js.console.error(f"Upload failed with status: {response.status}")
 
-        def on_failure(error):
-            js.console.error(f"Network error during upload: {error}")
-
-        fetch_promise.then(create_proxy(on_success)).catch(create_proxy(on_failure))
+        if response.ok:
+            js.console.log(f"Shadow Upload Success: {filename}")
+        else:
+            # 讀取錯誤訊息內容
+            error_text = await response.text()
+            js.console.error(f"Upload Failed [{response.status}]: {error_text}")
+            # 同時印在 Python console 備查
+            print(f"Upload Failed [{response.status}]: {error_text}")
 
     except Exception as e:
-        js.console.error(f"Upload init failed: {str(e)}")
+        js.console.error(f"Upload Exception: {str(e)}")
 
 def crop_banknote(image_bytes):
     try:
