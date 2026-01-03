@@ -32,9 +32,11 @@
 
     <style>
         .loading-overlay { backdrop-filter: blur(8px); background-color: rgba(11, 15, 25, 0.9); }
-        /* Smooth fade */
-        .fade-in { animation: fadeIn 0.3s ease-in; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .bg-checkerboard {
+            background-color: #e5e5f7;
+            background-image:  linear-gradient(45deg, #f4f4f5 25%, transparent 25%), linear-gradient(-45deg, #f4f4f5 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f4f4f5 75%), linear-gradient(-45deg, transparent 75%, #f4f4f5 75%);
+            background-size: 20px 20px;
+        }
     </style>
 </head>
 <body class="bg-navy-950 text-slate-200 min-h-screen flex flex-col font-sans antialiased">
@@ -67,24 +69,23 @@
         <div id="step-upload" class="flex flex-col items-center justify-center py-20 border-2 border-dashed border-navy-700 rounded-2xl bg-navy-900/30 hover:border-brand-blue/50 transition-all cursor-pointer">
             <i class="fa-solid fa-folder-open text-5xl text-brand-blue mb-6"></i>
             <h3 class="text-2xl font-bold text-white mb-2">Drop Folder Here</h3>
-            <p class="text-slate-400 mb-8">AI will pre-calculate crops for all images.</p>
+            <p class="text-slate-400 mb-8">Strict mode active. Python deskewing logic enabled.</p>
             <div class="flex gap-4">
                 <button onclick="document.getElementById('folder-input').click()" class="px-6 py-3 bg-brand-blue hover:bg-blue-600 text-white rounded-lg font-bold shadow-lg transition-transform active:scale-95">Select Folder</button>
                 <input id="folder-input" type="file" class="hidden" webkitdirectory directory />
             </div>
         </div>
 
-        <!-- 2. Pre-processing Loading -->
+        <!-- 2. Processing -->
         <div id="step-processing" class="hidden flex flex-col items-center justify-center py-20">
             <div class="w-20 h-20 border-4 border-navy-800 border-t-brand-accent rounded-full animate-spin mb-8"></div>
             <h3 class="text-2xl font-bold text-white mb-2">Analyzing Images...</h3>
-            <p id="analyze-status" class="text-slate-400">Please wait while AI detects banknotes.</p>
+            <p id="analyze-status" class="text-slate-400">Calculating precise crops & rotation...</p>
         </div>
 
-        <!-- 3. Review Interface -->
+        <!-- 3. Review -->
         <div id="step-review" class="hidden flex-grow flex flex-col lg:flex-row gap-6 h-full">
-            
-            <!-- Left: Controls & List -->
+            <!-- List -->
             <div class="lg:w-1/3 flex flex-col gap-4">
                 <div class="bg-navy-800 p-4 rounded-xl border border-navy-700">
                     <h4 class="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Current Batch</h4>
@@ -93,49 +94,42 @@
                         <div id="review-progress" class="h-full bg-brand-blue w-0 transition-all"></div>
                     </div>
                 </div>
-
                 <div class="flex-grow bg-navy-900 rounded-xl border border-navy-700 overflow-y-auto p-2 space-y-2" style="max-height: 60vh">
-                    <!-- Thumbnails list populated by JS -->
                     <div id="thumbnail-list"></div>
                 </div>
             </div>
 
-            <!-- Right: Editor -->
+            <!-- Editor -->
             <div class="lg:w-2/3 flex flex-col">
                 <div class="relative bg-checkerboard rounded-xl border border-navy-700 overflow-hidden flex-grow flex items-center justify-center shadow-2xl group" style="min-height: 500px;">
                     
-                    <!-- View Mode: Cropped Result -->
-                    <img id="review-image" class="max-w-full max-h-full object-contain shadow-lg transition-transform duration-200" />
+                    <!-- Preview Image (From Python) -->
+                    <img id="review-image" class="max-w-full max-h-full object-contain shadow-lg" />
                     
-                    <!-- Edit Mode: Cropper (Hidden by default) -->
+                    <!-- Edit Mode Container -->
                     <div id="edit-wrapper" class="absolute inset-0 bg-navy-950 hidden z-20">
                         <img id="edit-image" class="max-w-full h-full opacity-0" />
-                        
-                        <!-- Edit Controls -->
                         <div class="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-4 bg-navy-900/90 p-2 rounded-full backdrop-blur border border-navy-700 shadow-xl z-30">
-                            <button onclick="rotateCropper(-90)" class="w-10 h-10 rounded-full bg-navy-800 hover:bg-navy-700 text-white"><i class="fa-solid fa-rotate-left"></i></button>
                             <button onclick="saveEdit()" class="px-6 h-10 rounded-full bg-brand-green hover:bg-green-600 text-white font-bold">Done</button>
                             <button onclick="cancelEdit()" class="w-10 h-10 rounded-full bg-navy-800 hover:bg-red-900/50 text-red-400"><i class="fa-solid fa-xmark"></i></button>
                         </div>
                     </div>
 
-                    <!-- Overlay Actions -->
+                    <!-- Overlay -->
                     <div id="action-overlay" class="absolute inset-0 flex flex-col items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
-                        <p class="text-white font-bold text-lg mb-4 drop-shadow-md">Is this crop correct?</p>
                         <div class="flex gap-4 pointer-events-auto transform translate-y-4 group-hover:translate-y-0 transition-transform duration-200">
                             <button onclick="enterEditMode()" class="px-6 py-3 bg-white text-navy-900 rounded-lg font-bold hover:bg-slate-200 shadow-lg">
                                 <i class="fa-solid fa-pen-to-square mr-2"></i> Adjust
                             </button>
-                            <button onclick="approveCurrent()" class="px-8 py-3 bg-brand-blue text-white rounded-lg font-bold hover:bg-blue-600 shadow-lg ring-2 ring-white/20">
+                            <button onclick="approveCurrent()" class="px-8 py-3 bg-brand-blue text-white rounded-lg font-bold hover:bg-blue-600 shadow-lg">
                                 <i class="fa-solid fa-check mr-2"></i> Approve (Space)
                             </button>
                         </div>
                     </div>
                 </div>
-                
                 <div class="flex justify-between items-center mt-4 px-2">
                     <p id="filename-display" class="text-slate-400 font-mono text-sm truncate w-1/2">filename.jpg</p>
-                    <div class="text-xs text-slate-500">Press <kbd class="px-2 py-1 bg-navy-800 rounded border border-navy-700 text-slate-300">Space</kbd> to Approve</div>
+                    <div class="text-xs text-slate-500">Press Space to Next</div>
                 </div>
             </div>
         </div>
@@ -144,32 +138,23 @@
         <div id="step-final" class="hidden text-center py-20">
             <h2 class="text-3xl font-bold text-white mb-4">Packing Dataset...</h2>
             <p class="text-slate-400 mb-8">Creating ZIP and syncing shadow data.</p>
-            <button id="dl-btn" class="px-8 py-4 bg-brand-green text-white rounded-full font-bold shadow-xl text-lg hidden">
-                Download ZIP
-            </button>
+            <button id="dl-btn" class="px-8 py-4 bg-brand-green text-white rounded-full font-bold shadow-xl text-lg hidden">Download ZIP</button>
         </div>
 
     </main>
 
-    <!-- App Logic -->
     <script>
         let fileList = [];
-        let metaCache = {}; // filename -> {x, y, w, h, angle, orig_w, orig_h}
+        let metaCache = {};
+        let previewCache = {}; // Stores Blobs
         let currentIndex = 0;
         let cropper = null;
 
-        // --- 1. Upload & Pre-process ---
         document.getElementById('folder-input').addEventListener('change', (e) => {
             fileList = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
             if(fileList.length === 0) return;
-
-            // UI Switch
             document.getElementById('step-upload').classList.add('hidden');
             document.getElementById('step-processing').classList.remove('hidden');
-            
-            // Start Batch Analysis in Python
-            // We send files one by one to avoid memory explosion? 
-            // Better: Loop in JS, call Py for each, store result.
             processBatchAnalysis();
         });
 
@@ -177,7 +162,6 @@
             const total = fileList.length;
             const status = document.getElementById('analyze-status');
             const navProg = document.getElementById('nav-progress-bar');
-            
             document.getElementById('progress-indicator').classList.remove('hidden');
             
             for (let i = 0; i < total; i++) {
@@ -187,38 +171,28 @@
                 navProg.style.width = `${((i+1)/total)*100}%`;
 
                 const buffer = await file.arrayBuffer();
-                
-                // Call Python (Synchronous for now to ensure order)
-                // We dispatch event and wait for result? 
-                // PyScript event loop is tricky. Let's use a CustomEvent and a Promise wrapper if needed.
-                // For simplicity, we fire event and let Python call back a JS function to store data.
-                
                 await new Promise(resolve => {
-                    window.storeAnalysisResult = (filename, data) => {
-                        metaCache[filename] = data;
+                    window.storeAnalysisResult = (filename, meta, previewBuffer) => {
+                        metaCache[filename] = meta;
+                        if (previewBuffer) {
+                            previewCache[filename] = new Blob([previewBuffer], { type: 'image/png' });
+                        }
                         resolve();
                     };
-                    
                     window.dispatchEvent(new CustomEvent('py-analyze', {
                         detail: { buffer: new Uint8Array(buffer), filename: file.name }
                     }));
                 });
             }
-
-            // Analysis Done
             startReview();
         }
 
-        // --- 2. Review Logic ---
         function startReview() {
             document.getElementById('step-processing').classList.add('hidden');
             document.getElementById('step-review').classList.remove('hidden');
             document.getElementById('review-total').innerText = fileList.length;
-            
             renderThumbnailList();
             showCurrentImage();
-            
-            // Keyboard shortcut
             document.addEventListener('keydown', (e) => {
                 if (e.code === 'Space' && document.getElementById('edit-wrapper').classList.contains('hidden')) {
                     e.preventDefault();
@@ -239,48 +213,21 @@
             });
         }
 
-        async function showCurrentImage() {
+        function showCurrentImage() {
             const file = fileList[currentIndex];
-            const meta = metaCache[file.name]; // {x, y, w, h, angle}
+            const blob = previewCache[file.name];
             
             document.getElementById('review-idx').innerText = currentIndex + 1;
             document.getElementById('review-progress').style.width = `${((currentIndex+1)/fileList.length)*100}%`;
             document.getElementById('filename-display').innerText = file.name;
             
-            // Generate Cropped Preview using Canvas (Fast, client-side)
-            const img = new Image();
-            img.src = URL.createObjectURL(file);
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                // Simple rect crop for preview (ignoring rotation for speed? No, let's do it right)
-                // Actually, CropperJS logic might be complex to replicate.
-                // Let's just show the full image with a crop box overlay? 
-                // Or let Python send a thumbnail? Python is slow.
-                // Let's use Canvas to draw the crop.
-                
-                // If angle is small, simple crop
-                const ctx = canvas.getContext('2d');
-                
-                // Visual crop only
-                canvas.width = meta.w;
-                canvas.height = meta.h;
-                
-                // Draw logic (simplified deskew preview)
-                // Translating rotate logic to canvas:
-                ctx.save();
-                // Move to center of canvas
-                ctx.translate(canvas.width/2, canvas.height/2);
-                ctx.rotate(-meta.angle * Math.PI / 180); // Reverse angle to straighten
-                // Draw image offset by center of crop
-                ctx.drawImage(img, -(meta.x + meta.w/2), -(meta.y + meta.h/2));
-                ctx.restore();
-                
-                // Update Preview Image
-                document.getElementById('review-image').src = canvas.toDataURL();
-                
-                // Also update Highlight in list
-                renderThumbnailList();
-            };
+            const img = document.getElementById('review-image');
+            if (blob) {
+                img.src = URL.createObjectURL(blob);
+            } else {
+                img.src = ''; // Placeholder for error/not found
+            }
+            renderThumbnailList();
         }
 
         function approveCurrent() {
@@ -292,7 +239,6 @@
             }
         }
 
-        // --- 3. Edit Mode (Cropper.js) ---
         function enterEditMode() {
             const file = fileList[currentIndex];
             const meta = metaCache[file.name];
@@ -302,23 +248,30 @@
             img.src = URL.createObjectURL(file);
             
             if (cropper) cropper.destroy();
-            
             img.onload = () => {
+                // Use initial bounding box from Python meta as starting point
+                const initData = meta.found ? { x: meta.init_x, y: meta.init_y, width: meta.init_w, height: meta.init_h } : null;
                 cropper = new Cropper(img, {
                     viewMode: 1,
-                    data: { x: meta.x, y: meta.y, width: meta.w, height: meta.h, rotate: meta.angle }
+                    data: initData
                 });
             };
         }
 
         function saveEdit() {
             const data = cropper.getData();
-            // Update cache
+            // Mark as modified so Python knows to use simple crop instead of strict deskew
             metaCache[fileList[currentIndex].name] = {
-                x: data.x, y: data.y, w: data.width, h: data.height, angle: data.rotate
+                modified: true,
+                x: data.x, y: data.y, w: data.width, h: data.height
             };
-            cancelEdit();
-            showCurrentImage(); // Refresh preview
+            
+            // Update preview locally
+            cropper.getCroppedCanvas().toBlob(blob => {
+                previewCache[fileList[currentIndex].name] = blob;
+                cancelEdit();
+                showCurrentImage();
+            });
         }
 
         function cancelEdit() {
@@ -326,31 +279,14 @@
             if (cropper) cropper.destroy();
         }
 
-        function rotateCropper(deg) {
-            if(cropper) cropper.rotate(deg);
-        }
-
-        // --- 4. Finalize ---
         function finishReview() {
             document.getElementById('step-review').classList.add('hidden');
             document.getElementById('step-final').classList.remove('hidden');
-            
-            // Send all approved meta to Python to generate ZIP
-            window.dispatchEvent(new CustomEvent('py-finalize', {
-                detail: { 
-                    fileList: fileList, // Need to pass buffers again? No, Python can't hold all.
-                    // Strategy: We loop in JS again, sending buffer + confirmed meta one by one.
-                    meta: metaCache 
-                }
-            }));
-            
             processFinalBatch();
         }
 
         async function processFinalBatch() {
-            // Start ZIP
             window.dispatchEvent(new CustomEvent('py-init-zip'));
-            
             for (const file of fileList) {
                 const buffer = await file.arrayBuffer();
                 const meta = metaCache[file.name];
@@ -358,16 +294,10 @@
                 await new Promise(resolve => {
                     window.finalizeDone = resolve;
                     window.dispatchEvent(new CustomEvent('py-process-item', {
-                        detail: { 
-                            buffer: new Uint8Array(buffer), 
-                            filename: file.name,
-                            meta: meta
-                        }
+                        detail: { buffer: new Uint8Array(buffer), filename: file.name, meta: meta }
                     }));
                 });
             }
-            
-            // Close ZIP
             window.dispatchEvent(new CustomEvent('py-close-zip'));
         }
         
@@ -383,10 +313,8 @@
                 document.body.appendChild(a);
                 a.click();
             };
-            btn.click(); // Auto click
+            btn.click();
         };
-
     </script>
-    <script type="py" src="/script.py?v=15"></script>
 </body>
 </html>
