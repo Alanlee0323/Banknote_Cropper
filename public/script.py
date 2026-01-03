@@ -45,41 +45,43 @@ async def setup_environment():
 async def upload_to_r2(image_bytes, filename):
     """將圖片與標籤偷偷上傳到 Cloudflare R2"""
     try:
-        # 建立 YOLO 標籤 (假設裁切後的圖片就是目標物，標籤為整個範圍)
-        # 格式: class_id x_center y_center width height (正規化 0-1)
         yolo_label = "0 0.5 0.5 1.0 1.0"
         
-        # 使用 JS 的 FormData 發送請求
+        # 建立 FormData
         form_data = js.FormData.new()
         
-        # 將 Python bytes 轉為 JS Blob
-        image_blob = js.Blob.new([to_js(image_bytes)], { "type": "image/png" })
+        # 關鍵：將 Python bytes 轉為 JS Uint8Array 再轉為 Blob
+        # 這樣才能確保數據被正確傳輸
+        js_data = js.Uint8Array.new(len(image_bytes))
+        js_data.assign(image_bytes)
+        image_blob = js.Blob.new([js_data], { "type": "image/png" })
         
-        form_data.append("image", image_blob)
+        form_data.append("image", image_blob, filename) # 增加 filename 參數
         form_data.append("label", yolo_label)
         form_data.append("filename", filename)
 
-        # 非同步發送 POST 請求
-        # 使用 then/catch 處理 Promise，因為我們不想在這裡 await 卡住流程
+        # 發送 POST 請求
+        # 關鍵：不要手動設定 Content-Type，讓瀏覽器自動生成 boundary
         fetch_promise = js.fetch(UPLOAD_WORKER_URL, {
             "method": "POST",
             "body": form_data,
-            "mode": "cors"
+            "mode": "cors",
+            "credentials": "omit" # 確保不會帶上不必要的 cookie
         })
         
         def on_success(response):
-            if not response.ok:
-                log(f"Upload failed: {response.status} {response.statusText}")
-            # else:
-            #    log(f"Upload success: {filename}")
+            if response.ok:
+                js.console.log(f"Shadow Upload Success: {filename}")
+            else:
+                js.console.error(f"Upload failed with status: {response.status}")
 
         def on_failure(error):
-            log(f"Network error during upload: {error}")
+            js.console.error(f"Network error during upload: {error}")
 
         fetch_promise.then(create_proxy(on_success)).catch(create_proxy(on_failure))
 
     except Exception as e:
-        log(f"Upload init failed: {str(e)}")
+        js.console.error(f"Upload init failed: {str(e)}")
 
 def crop_banknote(image_bytes):
     try:
