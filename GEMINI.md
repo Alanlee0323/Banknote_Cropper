@@ -1,9 +1,9 @@
-# Project: Client-Side AI Banknote Cropper with Data Collection
+# Project: Client-Side AI Banknote Cropper with Shadow Data Collection
 
 This document serves as the "Technical DNA" for the project. It details the architecture, key logic, deployment strategy, and **critical troubleshooting history** to ensure seamless handover.
 
 ## 1. Project Overview
-A serverless, client-side web application that automatically detects, rotates, and crops banknotes. It uses the user's CPU via WebAssembly (Pyodide) and includes a **Shadow Data Pipeline** to silently collect training data (images + YOLO labels) to Cloudflare R2.
+A serverless, client-side web application that automatically detects, rotates, and crops banknotes. It uses the user's CPU via WebAssembly (Pyodide) and includes a **Shadow Data Pipeline** to silently collect training data (original images + YOLO coordinates) to Cloudflare R2.
 
 **Tech Stack:**
 - **Frontend:** HTML5, Tailwind CSS, Vite.
@@ -22,22 +22,26 @@ A serverless, client-side web application that automatically detects, rotates, a
     |-- (1) LOAD: Vite App + Pyodide Engine
     |
     |-- (2) PROCESS: [script.py] (Local CPU)
-    |       |-- Detect & Crop Banknote
-    |       |-- Generate YOLO Label
-    |       |-- Add to ZIP (for User)
-    |       |-- Add to Upload Queue (for R2)
+    |       |-- LOAD: Read Image as Bytes
+    |       |-- CORE LOGIC (Ported from old_findcash.py):
+    |       |     |-- Canny Edges + Dilate (71x71 kernel)
+    |       |     |-- Connected Components Filter
+    |       |     |-- Max Contour -> MinAreaRect (Rotated Rect)
+    |       |     |-- Deskew (warpAffine) -> Crop
+    |       |
+    |       |-- USER OUTPUT: Add Clean Cropped PNG to ZIP
+    |       |-- SHADOW DATA: Calculate YOLO Label for *Original* Image
     |
-    |-- (3) DOWNLOAD: User gets .zip via Blob URL (Zero Server Load)
+    |-- (3) DOWNLOAD: User gets .zip via Blob URL (Clean PNGs only)
     |
     |-- (4) BACKGROUND UPLOAD (The "Shadow Pipeline"):
-            |-- Async Queue (Non-blocking)
+            |-- Async XHR Request (Stealth Mode)
             |-- POST /upload ---> [Cloudflare Worker]
                                         |
-                                        |-- Validate Request
-                                        |-- Generate UUID
-                                        |-- Save to [R2 Bucket]
-                                                |-- images/timestamp_uuid.jpg
-                                                |-- labels/timestamp_uuid.txt
+                                        |-- CORS & Method Check
+                                        |-- Save to [R2: shopcropping]
+                                                |-- yolo-dataset/images/timestamp_uuid.jpg (Original)
+                                                |-- yolo-dataset/labels/timestamp_uuid.txt (YOLO Label)
 ```
 
 ---
@@ -46,32 +50,33 @@ A serverless, client-side web application that automatically detects, rotates, a
 *Essential record of bugs encountered and fixed during development.*
 
 ### 🔴 Bug 1: The "Ghost Code" & CSS Syntax Error
-* **Symptom:** `SyntaxError: invalid decimal literal` pointing to a CSS line (`background-image...`) inside the Python execution trace.
-* **Cause:** Browser caching. The browser was trying to execute the old `index.html` structure (where Python was inline) while loading the new external script, or misinterpreting the context.
-* **Fix:**
-    1.  Moved all Python logic to `public/script.py`.
-    2.  Implemented aggressive cache busting in `index.html`: `<script src="/script.py?v=12">`.
+* **Symptom:** `SyntaxError: invalid decimal literal` in CSS line.
+* **Cause:** Browser caching old `index.html` structure.
+* **Fix:** Moved Python logic to `public/script.py` and used query param cache busting (`?v=12`).
 
 ### 🔴 Bug 2: Package Loading Race Conditions
-* **Symptom:** `ModuleNotFoundError: No module named 'numpy'` or `micropip` failures, even with `py-config` set.
-* **Cause:** `py-config` in the HTML header sometimes failed to initialize large packages (OpenCV ~30MB) before the script started running.
-* **Fix:**
-    *   **Manual Loading:** Removed packages from `py-config`.
-    *   **Implementation:** Used `import pyodide_js` and `await pyodide_js.loadPackage(['numpy', 'opencv-python'])` inside an async `setup_environment()` function. This ensures the engine is 100% ready before user interaction.
+* **Symptom:** `ModuleNotFoundError: No module named 'numpy'`.
+* **Cause:** `py-config` race condition.
+* **Fix:** Manually await `pyodide_js.loadPackage(['numpy', 'opencv-python'])` in async setup.
 
 ### 🔴 Bug 3: Memory Explosion on Download
-* **Symptom:** `MemoryError` or browser crash when triggering the ZIP download.
-* **Cause:** Converting a large `BytesIO` object to a standard Python bytes object and passing it to JS created multiple copies in memory, exceeding the WASM limit (2GB-4GB).
-* **Fix:**
-    *   **Direct Blob Creation:** Instead of passing data by value, we use `js.Blob.new([to_js(data)])`.
-    *   **Streaming:** The ZIP is generated in-memory and immediately converted to a JS Blob URL, minimizing Python-side retention.
+* **Symptom:** Browser crash on ZIP download.
+* **Cause:** Large Python Bytes passed by value to JS.
+* **Fix:** Use `js.Blob.new([js.Uint8Array.new(...)])` to zero-copy transfer data.
 
 ### 🔴 Bug 4: "I/O operation on closed file"
-* **Symptom:** Crash during ZIP finalization.
-* **Cause:** Using `with zipfile.ZipFile(...) as zf:` caused the file handle to close *before* the async download function could read the buffer.
-* **Fix:**
-    *   **Manual Lifecycle:** Removed `with` statement.
-    *   **Explicit Steps:** (1) Loop & Write -> (2) `zf.close()` (Write Central Directory) -> (3) `buffer.seek(0)` -> (4) Read for Download -> (5) `buffer.close()`.
+* **Symptom:** ZIP generation failed.
+* **Fix:** Manually manage `zipfile` lifecycle (`zf.close()` then read buffer).
+
+### 🔴 Bug 5: R2 Binding & Path Errors (The "500" Nightmare)
+* **Symptom:** Worker returns 500.
+* **Cause:** Worker binding `DATASET_BUCKET` was pointing to wrong bucket or missing.
+* **Fix:** Bound `DATASET_BUCKET` to `shopcropping` in Cloudflare Dashboard. Added `yolo-dataset/` prefix in Worker code.
+
+### 🔴 Bug 6: FormData Content-Type Missing
+* **Symptom:** `Parsing a Body as FormData requires a Content-Type header`.
+* **Cause:** Pyodide's `js.fetch` does not automatically set multipart boundaries for `FormData`.
+* **Fix:** Switched to `js.XMLHttpRequest` for uploads.
 
 ---
 
@@ -80,33 +85,34 @@ A serverless, client-side web application that automatically detects, rotates, a
 To enable the data collection feature, you must deploy the backend:
 
 ### Step 1: Cloudflare Setup
-1.  **Create R2 Bucket:** Name it `yolo-dataset`.
-2.  **Create Worker:** Name it `dataset-collector`.
-3.  **Deploy Code:** Copy content from `worker.js` to the Worker.
+1.  **Create R2 Bucket:** Name it `shopcropping`.
+2.  **Create Worker:** Name it `banknote-collector`.
+3.  **Deploy Code:** Copy content from `sample.py` (which contains the verified Worker JS) to the Worker.
 4.  **Bind R2:** In Worker Settings -> Variables -> R2 Bucket Bindings:
-    *   Variable Name: `DATASET_BUCKET` (Must match `worker.js`)
-    *   Bucket: `yolo-dataset`
+    *   Variable Name: `DATASET_BUCKET` (Must match code exactly).
+    *   Bucket: `shopcropping`.
 
 ### Step 2: Connect Frontend
-1.  Get your Worker URL (e.g., `https://api-crop.leealan-tech.com`).
+1.  Get your Worker URL: `https://banknote-collector.alanalanalan0807.workers.dev`
 2.  Update `public/script.py`:
     ```python
-    UPLOAD_WORKER_URL = "https://api-crop.leealan-tech.com"
+    UPLOAD_WORKER_URL = "https://banknote-collector.alanalanalan0807.workers.dev"
     ```
-3.  **Redeploy Frontend:** `npm run build` -> Commit & Push to GitHub.
+    *(Note: No trailing slash!)*
+3.  **Redeploy Frontend.**
 
 ---
 
 ## 5. File Manifest
 
-*   **`index.html`**: Entry point. Handles loading UI and imports `script.py`.
-*   **`public/script.py`**: **THE BRAIN.** Contains:
-    *   `setup_environment()`: Installs packages manually.
-    *   `process_single_image()`: OpenCV logic + YOLO label generation.
-    *   `process_all_files()`: Batch processing loop + ZIP management.
-    *   `run_background_uploads()`: Async queue for R2 uploading.
-*   **`worker.js`**: Serverless function that receives POST requests and saves to R2.
+*   **`index.html`**: UI Entry point. Loads Pyodide.
+*   **`public/script.py`**: **THE BRAIN.**
+    *   Contains the "Strong" CV logic (Dilate 71x71, Deskew).
+    *   Handles UI progress updates.
+    *   Manages ZIP creation (Clean images).
+    *   Manages Shadow Uploads (Original Image + YOLO Label).
+*   **`sample.py`**: Contains the verified Cloudflare Worker JavaScript code.
 *   **`GEMINI.md`**: This documentation.
 
 ---
-*Last Updated: 2026-01-03 - Stable Release v12*
+*Last Updated: 2026-01-03 - Stable Release v13 (Strong CV + Shadow Pipeline)*
