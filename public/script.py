@@ -43,10 +43,11 @@ async def setup_environment():
         return False
 
 async def upload_to_r2(image_bytes, filename):
-    """將圖片與標籤偷偷上傳到 Cloudflare R2 (Async with Debug Logging)"""
+    """將圖片與標籤偷偷上傳到 Cloudflare R2 (Using XMLHttpRequest)"""
     try:
         yolo_label = "0 0.5 0.5 1.0 1.0"
         
+        # 準備數據
         form_data = js.FormData.new()
         js_data = js.Uint8Array.new(len(image_bytes))
         js_data.assign(image_bytes)
@@ -56,22 +57,25 @@ async def upload_to_r2(image_bytes, filename):
         form_data.append("label", yolo_label)
         form_data.append("filename", filename)
 
-        # 使用 await 直接等待結果 (因為這是跑在 ensure_future 的 task 裡，不會卡住 UI)
-        response = await js.fetch(UPLOAD_WORKER_URL, {
-            "method": "POST",
-            "body": form_data,
-            "mode": "cors",
-            "credentials": "omit"
-        })
+        # 使用 XHR 替代 fetch，解決 Pyodide 中 FormData Content-Type 遺失的問題
+        xhr = js.XMLHttpRequest.new()
+        xhr.open("POST", UPLOAD_WORKER_URL, True)
+        
+        # 定義回調
+        def on_load(event):
+            if xhr.status >= 200 and xhr.status < 300:
+                js.console.log(f"Shadow Upload Success: {filename}")
+            else:
+                js.console.error(f"Upload Failed [{xhr.status}]: {xhr.responseText}")
 
-        if response.ok:
-            js.console.log(f"Shadow Upload Success: {filename}")
-        else:
-            # 讀取錯誤訊息內容
-            error_text = await response.text()
-            js.console.error(f"Upload Failed [{response.status}]: {error_text}")
-            # 同時印在 Python console 備查
-            print(f"Upload Failed [{response.status}]: {error_text}")
+        def on_error(event):
+            js.console.error(f"Network Error during upload of {filename}")
+
+        xhr.onload = create_proxy(on_load)
+        xhr.onerror = create_proxy(on_error)
+        
+        # 發送
+        xhr.send(form_data)
 
     except Exception as e:
         js.console.error(f"Upload Exception: {str(e)}")
