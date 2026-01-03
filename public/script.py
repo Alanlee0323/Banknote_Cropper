@@ -21,17 +21,45 @@ def log(msg):
 
 async def setup_environment():
     global cv2, np
+    log("Starting Setup...")
+    loader_status = document.getElementById("loader-status") if document.getElementById("loader-status") else None
+    
     try:
-        await pyodide_js.loadPackage(['numpy', 'opencv-python'])
+        # 1. Load Micropip first (safer dependency management)
+        import micropip
+        
+        # 2. Update UI
+        if loader_status: loader_status.innerText = "Installing OpenCV (this may take time)..."
+        
+        # 3. Explicitly install opencv-python via micropip if loadPackage fails or just as standard
+        # Pyodide's loadPackage is fast for standard libs, but let's try micropip for robustness
+        await micropip.install("opencv-python")
+        await micropip.install("numpy")
+        
+        # 4. Import
         import cv2 as _cv2
         import numpy as _np
         cv2 = _cv2
         np = _np
-        if document.getElementById("env-loader"):
-            document.getElementById("env-loader").style.display = "none"
+        
+        log(f"OpenCV Version: {cv2.__version__}")
+        
+        # 5. Hide Loader
+        loader = document.getElementById("env-loader")
+        if loader: 
+            loader.style.opacity = "0"
+            await asyncio.sleep(0.5)
+            loader.style.display = "none"
+            
         log("Engine Ready (Legacy Exact Mode).")
+        return True
+
     except Exception as e:
-        log(f"Init Error: {e}")
+        log(f"CRITICAL INIT ERROR: {e}")
+        if loader_status:
+            loader_status.innerText = f"Error: {e}"
+            loader_status.style.color = "red"
+        return False
 
 # --- Shadow Pipeline ---
 async def upload_to_r2(image_bytes, filename, yolo_label):
