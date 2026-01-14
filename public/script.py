@@ -6,6 +6,7 @@ import io
 import zipfile
 import sys
 import pyodide_js
+import gc
 
 # --- 配置 ---
 UPLOAD_WORKER_URL = "https://banknote-collector.alanalanalan0807.workers.dev"
@@ -196,12 +197,15 @@ async def process_all_files(event):
                 js.window.update_preview(js_orig, js_crop, meta_js)
                 
                 # Save & Upload
-                base_name = ".".join(file.name.split(".")[:-1])
-                img_name_for_zip = f"{base_name}_cropped.png"
-                zf.writestr(img_name_for_zip, cropped_bytes)
-                asyncio.ensure_future(upload_to_r2(original_data, file.name, real_yolo_label))
+                try:
+                    base_name = ".".join(file.name.split(".")[:-1])
+                    img_name_for_zip = f"{base_name}_cropped.png"
+                    zf.writestr(img_name_for_zip, cropped_bytes)
+                    asyncio.ensure_future(upload_to_r2(original_data, file.name, real_yolo_label))
+                    success_count += 1
+                except ValueError:
+                    log(f"Skipped save {file.name}: Zip closed")
                 
-                success_count += 1
             else:
                 log(f"Skipped: {file.name}")
         except Exception as e:
@@ -209,6 +213,7 @@ async def process_all_files(event):
         
         # Small sleep to let UI update render
         await asyncio.sleep(0.05)
+        gc.collect()
 
     # Finalize
     zf.close()
