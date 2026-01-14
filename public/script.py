@@ -11,7 +11,13 @@ import gc
 # --- 配置 ---
 UPLOAD_WORKER_URL = "https://banknote-collector.alanalanalan0807.workers.dev"
 
-# --- UI Helpers ---
+# --- Globals ---
+cv2 = None
+np = None
+zip_buffer = None
+zf = None
+is_processing = False
+
 def log(msg):
     # 簡單的 console log，不再依賴舊的 log-container
     js.console.log(f"[Python] {msg}")
@@ -146,94 +152,108 @@ def process_image_data(image_bytes):
         return None, None, None
 
 async def process_all_files(event):
+    global is_processing, zf, zip_buffer
+    if is_processing:
+        log("Process already running, skipping trigger.")
+        return
+    
     files = js.window.selected_files
     if not files or files.length == 0: return
 
-    # UI Setup
-    log(f"Processing {files.length} images...")
-    
-    zip_buffer = io.BytesIO()
-    zf = zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED)
-    
-    success_count = 0
-    total = files.length
-    
-    # UI Elements
-    status_text = document.getElementById("status-text")
-    progress_bar = document.getElementById("progress-bar")
-    progress_percent = document.getElementById("progress-percent")
-    processed_count = document.getElementById("processed-count")
-    
-    for i in range(total):
-        file = files.item(i)
+    is_processing = True
+    try:
+        # UI Setup
+        log(f"Processing {files.length} images...")
         
-        # Update UI Progress
-        pct = int(((i) / total) * 100)
-        if progress_bar: progress_bar.style.width = f"{pct}%"
-        if progress_percent: progress_percent.innerText = f"{pct}%"
-        if processed_count: processed_count.innerText = f"{i}/{total}"
-        if status_text: status_text.innerText = f"Processing {file.name}..."
+        zip_buffer = io.BytesIO()
+        zf = zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED)
         
-        try:
-            array_buffer = await file.arrayBuffer()
-            original_data = array_buffer.to_bytes()
+        success_count = 0
+        total = files.length
+        
+        # UI Elements
+        status_text = document.getElementById("status-text")
+        progress_bar = document.getElementById("progress-bar")
+        progress_percent = document.getElementById("progress-percent")
+        processed_count = document.getElementById("processed-count")
+        
+        for i in range(total):
+            file = files.item(i)
             
-            # Process
-            cropped_bytes, real_yolo_label, meta = process_image_data(original_data)
+            # Update UI Progress
+            pct = int(((i) / total) * 100)
+            if progress_bar: progress_bar.style.width = f"{pct}%"
+            if progress_percent: progress_percent.innerText = f"{pct}%"
+            if processed_count: processed_count.innerText = f"{i}/{total}"
+            if status_text: status_text.innerText = f"Processing {file.name}..."
             
-            if cropped_bytes and real_yolo_label:
-                # Update Live Preview (Call JS helper)
-                # Need to convert bytes to JS Uint8Array
-                js_orig = js.Uint8Array.new(len(original_data))
-                js_orig.assign(original_data)
+            original_data = None
+            cropped_bytes = None
+            try:
+                array_buffer = await file.arrayBuffer()
+                original_data = array_buffer.to_bytes()
                 
-                js_crop = js.Uint8Array.new(len(cropped_bytes))
-                js_crop.assign(cropped_bytes)
+                # Process
+                cropped_bytes, real_yolo_label, meta = process_image_data(original_data)
                 
-                # Add filename to meta
-                meta_js = to_js(meta)
-                meta_js.filename = file.name
-                
-                js.window.update_preview(js_orig, js_crop, meta_js)
-                
-                # Save & Upload
-                try:
-                    base_name = ".".join(file.name.split(".")[:-1])
-                    img_name_for_zip = f"{base_name}_cropped.png"
-                    zf.writestr(img_name_for_zip, cropped_bytes)
-                    asyncio.ensure_future(upload_to_r2(original_data, file.name, real_yolo_label))
-                    success_count += 1
-                except ValueError:
-                    log(f"Skipped save {file.name}: Zip closed")
-                
-            else:
-                log(f"Skipped: {file.name}")
-        except Exception as e:
-            log(f"Error {file.name}: {e}")
-        
-        # Small sleep to let UI update render
-        await asyncio.sleep(0.05)
-        gc.collect()
+                if cropped_bytes and real_yolo_label:
+                    # Update Live Preview
+                    js_orig = js.Uint8Array.new(len(original_data))
+                    js_orig.assign(original_data)
+                    
+                    js_crop = js.Uint8Array.new(len(cropped_bytes))
+                    js_crop.assign(cropped_bytes)
+                    
+                    meta_js = to_js(meta)
+                    meta_js.filename = file.name
+                    js.window.update_preview(js_orig, js_crop, meta_js)
+                    
+                    # Save & Upload
+                    try:
+                        base_name = ".".join(file.name.split(".")[:-1])
+                        img_name_for_zip = f"{base_name}_cropped.png"
+                        zf.writestr(img_name_for_zip, cropped_bytes)
+                        asyncio.ensure_future(upload_to_r2(original_data, file.name, real_yolo_label))
+                        success_count += 1
+                    except ValueError:
+                        log(f"Skipped save {file.name}: Zip closed")
+                else:
+                    log(f"Skipped: {file.name}")
+            except Exception as e:
+                log(f"Error {file.name}: {e}")
+            finally:
+                # Aggressive memory clearing
+                original_data = None
+                cropped_bytes = None
+            
+            # Longer sleep to let browser GC work
+            await asyncio.sleep(0.1)
+            gc.collect()
 
-    # Finalize
-    zf.close()
-    zip_buffer.seek(0)
-    
-    # UI Completion State
-    if progress_bar: progress_bar.style.width = "100%"
-    if progress_percent: progress_percent.innerText = "100%"
-    if processed_count: processed_count.innerText = f"{total}/{total}"
-    if status_text: status_text.innerText = "Processing complete"
-    
-    if success_count > 0:
-        zip_data = zip_buffer.getvalue()
-        js_array = js.Uint8Array.new(len(zip_data))
-        js_array.assign(zip_data)
-        
-        # Trigger Download
-        js.window.trigger_download(js_array, "banknote_dataset.zip")
-    
-    zip_buffer.close()
+        # Finalize
+        if zf:
+            zf.close()
+            zip_buffer.seek(0)
+            
+            # UI Completion State
+            if progress_bar: progress_bar.style.width = "100%"
+            if progress_percent: progress_percent.innerText = "100%"
+            if processed_count: processed_count.innerText = f"{total}/{total}"
+            if status_text: status_text.innerText = "Processing complete"
+            
+            if success_count > 0:
+                zip_data = zip_buffer.getvalue()
+                js_array = js.Uint8Array.new(len(zip_data))
+                js_array.assign(zip_data)
+                js.window.trigger_download(js_array, "banknote_dataset.zip")
+            
+            zip_buffer.close()
+            zf = None
+
+    except Exception as e:
+        log(f"Global Process Error: {e}")
+    finally:
+        is_processing = False
 
 async def main():
     ready = await setup_environment()
