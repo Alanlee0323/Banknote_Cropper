@@ -26,17 +26,13 @@ async def setup_environment():
     loader_status = document.getElementById("loader-status") if document.getElementById("loader-status") else None
     
     try:
-        # 1. Load Micropip first (safer dependency management)
-        import micropip
-        
-        # 2. Update UI
+        # 1. Update UI
         if loader_status: loader_status.innerText = "Installing OpenCV (this may take time)..."
         
-        # 3. Explicitly install opencv-python via micropip
-        await micropip.install("opencv-python")
-        await micropip.install("numpy")
+        # 2. Load Packages via Pyodide Standard Loader (Reliable)
+        await pyodide_js.loadPackage(['numpy', 'opencv-python'])
         
-        # 4. Import
+        # 3. Import
         import cv2 as _cv2
         import numpy as _np
         cv2 = _cv2
@@ -44,7 +40,7 @@ async def setup_environment():
         
         log(f"OpenCV Version: {cv2.__version__}")
         
-        # 5. Hide Loader
+        # 4. Hide Loader
         loader = document.getElementById("env-loader")
         if loader: 
             loader.style.opacity = "0"
