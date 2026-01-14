@@ -177,6 +177,10 @@ async def process_all_files(event):
         progress_percent = document.getElementById("progress-percent")
         processed_count = document.getElementById("processed-count")
         
+        BATCH_SIZE = 50
+        batch_index = 1
+        current_batch_count = 0
+        
         for i in range(total):
             file = files.item(i)
             
@@ -215,6 +219,27 @@ async def process_all_files(event):
                         zf.writestr(img_name_for_zip, cropped_bytes)
                         asyncio.ensure_future(upload_to_r2(original_data, file.name, real_yolo_label))
                         success_count += 1
+                        current_batch_count += 1
+                        
+                        # --- Batch Download Trigger ---
+                        if current_batch_count >= BATCH_SIZE:
+                            log(f"Batch {batch_index} full ({BATCH_SIZE} images). Downloading...")
+                            zf.close()
+                            zip_buffer.seek(0)
+                            
+                            zip_data = zip_buffer.getvalue()
+                            js_array = js.Uint8Array.new(len(zip_data))
+                            js_array.assign(zip_data)
+                            js.window.trigger_download(js_array, f"dataset_part{batch_index}.zip")
+                            
+                            # Reset for next batch
+                            zip_buffer.close()
+                            zip_buffer = io.BytesIO()
+                            zf = zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED)
+                            current_batch_count = 0
+                            batch_index += 1
+                            gc.collect() # Force clean
+                            
                     except ValueError:
                         log(f"Skipped save {file.name}: Zip closed")
                 else:
@@ -230,7 +255,7 @@ async def process_all_files(event):
             await asyncio.sleep(0.1)
             gc.collect()
 
-        # Finalize
+        # Finalize (Download remaining)
         if zf:
             zf.close()
             zip_buffer.seek(0)
@@ -241,11 +266,11 @@ async def process_all_files(event):
             if processed_count: processed_count.innerText = f"{total}/{total}"
             if status_text: status_text.innerText = "Processing complete"
             
-            if success_count > 0:
+            if current_batch_count > 0:
                 zip_data = zip_buffer.getvalue()
                 js_array = js.Uint8Array.new(len(zip_data))
                 js_array.assign(zip_data)
-                js.window.trigger_download(js_array, "banknote_dataset.zip")
+                js.window.trigger_download(js_array, f"dataset_part{batch_index}.zip")
             
             zip_buffer.close()
             zf = None
