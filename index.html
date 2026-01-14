@@ -252,6 +252,21 @@
 
     </main>
 
+    <!-- Download Modal -->
+    <div id="download-modal" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm hidden">
+        <div class="bg-navy-800 p-8 rounded-2xl border border-navy-700 shadow-2xl text-center max-w-md mx-4">
+            <div class="w-16 h-16 bg-brand-green/20 text-brand-green rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                <i class="fa-solid fa-file-zipper"></i>
+            </div>
+            <h3 class="text-2xl font-bold text-white mb-2">Batch Ready</h3>
+            <p id="dl-modal-filename" class="text-slate-400 mb-6 font-mono">dataset_part1.zip</p>
+            <p class="text-slate-500 text-sm mb-6">Click below to download this batch and continue processing.</p>
+            <button id="dl-modal-btn" class="w-full px-6 py-4 bg-brand-green hover:bg-green-600 text-white rounded-xl font-bold shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-2">
+                <i class="fa-solid fa-download"></i> Download & Continue
+            </button>
+        </div>
+    </div>
+
     <!-- Main Python Logic -->
     <script type="py" src="/script.py?v=13"></script>
 
@@ -260,6 +275,42 @@
         const dropzone = document.getElementById('upload-state');
         const fileInput = document.getElementById('dropzone-file');
         const folderInput = document.getElementById('folder-input');
+
+        // --- Batch Download Logic ---
+        window.python_resume_resolver = null;
+
+        window.ask_for_download = function(uint8array, filename) {
+            return new Promise(resolve => {
+                const modal = document.getElementById('download-modal');
+                const btn = document.getElementById('dl-modal-btn');
+                const nameDisplay = document.getElementById('dl-modal-filename');
+                
+                nameDisplay.innerText = filename;
+                modal.classList.remove('hidden');
+                
+                // One-time click handler
+                btn.onclick = () => {
+                    // Trigger Download
+                    const blob = new Blob([uint8array], { type: 'application/zip' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    
+                    // UI Cleanup
+                    modal.classList.add('hidden');
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    
+                    // Resume Python
+                    resolve(); 
+                };
+            });
+        }
+        
+        // ... (rest of the script)
 
         // Drag & Drop
         dropzone.addEventListener('dragover', (e) => {

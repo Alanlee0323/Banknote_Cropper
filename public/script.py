@@ -223,14 +223,16 @@ async def process_all_files(event):
                         
                         # --- Batch Download Trigger ---
                         if current_batch_count >= BATCH_SIZE:
-                            log(f"Batch {batch_index} full ({BATCH_SIZE} images). Downloading...")
+                            log(f"Batch {batch_index} full ({BATCH_SIZE} images). Waiting for download...")
                             zf.close()
                             zip_buffer.seek(0)
                             
                             zip_data = zip_buffer.getvalue()
                             js_array = js.Uint8Array.new(len(zip_data))
                             js_array.assign(zip_data)
-                            js.window.trigger_download(js_array, f"dataset_part{batch_index}.zip")
+                            
+                            # PAUSE HERE until user clicks download
+                            await js.window.ask_for_download(js_array, f"dataset_part{batch_index}.zip")
                             
                             # Reset for next batch
                             zip_buffer.close()
@@ -266,11 +268,13 @@ async def process_all_files(event):
             if processed_count: processed_count.innerText = f"{total}/{total}"
             if status_text: status_text.innerText = "Processing complete"
             
-            if current_batch_count > 0:
+            if success_count > 0:
                 zip_data = zip_buffer.getvalue()
                 js_array = js.Uint8Array.new(len(zip_data))
                 js_array.assign(zip_data)
-                js.window.trigger_download(js_array, f"dataset_part{batch_index}.zip")
+                
+                # Trigger Final Download
+                await js.window.ask_for_download(js_array, f"dataset_part{batch_index}.zip")
             
             zip_buffer.close()
             zf = None
