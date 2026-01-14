@@ -6,6 +6,7 @@ import io
 import zipfile
 import sys
 import pyodide_js
+import gc
 
 # --- 配置 ---
 UPLOAD_WORKER_URL = "https://banknote-collector.alanalanalan0807.workers.dev"
@@ -31,8 +32,7 @@ async def setup_environment():
         # 2. Update UI
         if loader_status: loader_status.innerText = "Installing OpenCV (this may take time)..."
         
-        # 3. Explicitly install opencv-python via micropip if loadPackage fails or just as standard
-        # Pyodide's loadPackage is fast for standard libs, but let's try micropip for robustness
+        # 3. Explicitly install opencv-python via micropip
         await micropip.install("opencv-python")
         await micropip.install("numpy")
         
@@ -152,24 +152,15 @@ def process_and_get_preview(nparr):
         
         if final_crop.size == 0: return None, None
 
-        # Encode Preview (Return the actual result user will see)
+        # Encode Preview
         _, encoded_preview = cv2.imencode(".png", final_crop)
-        
-        # Store metadata for final processing (reconstruction)
-        # We store the *raw inputs* for warpAffine so we can reproduce it later if needed,
-        # OR we just trust the user input later.
-        # For the "Edit" mode, we need the initial box on the *Original* image.
-        # But wait, old_findcash uses Rotated Rect. JS Cropper only supports upright rects (mostly).
-        # We will pass the BoundingRect of the MaxContour to JS for the "Edit" initial state.
-        
         bx, by, bw, bh = cv2.boundingRect(max_contour)
         
         meta = {
             "found": True,
             "angle": angle,
             "cx": center[0], "cy": center[1],
-            "w": width, "h": height, # Rotated dimensions
-            # For JS Cropper Initial Box (Approximation)
+            "w": width, "h": height, 
             "init_x": bx, "init_y": by, "init_w": bw, "init_h": bh
         }
         
@@ -190,18 +181,18 @@ def on_py_analyze(event):
         preview_bytes, meta = process_and_get_preview(nparr)
         
         if preview_bytes:
-            # Send Preview Blob back to JS (This fixes the "Blank Preview" bug)
             js_preview = js.Uint8Array.new(len(preview_bytes))
             js_preview.assign(preview_bytes)
-            
             js.window.storeAnalysisResult(filename, to_js(meta), js_preview)
         else:
-            # Failed to find cash
             js.window.storeAnalysisResult(filename, to_js({"found": False}), None)
             
     except Exception as e:
         log(f"Event Error: {e}")
         js.window.storeAnalysisResult(event.detail.filename, to_js({"found": False}), None)
+    
+    # Force Garbage Collection
+    gc.collect()
 
 # --- Finalize ---
 def on_init_zip(event):
@@ -217,55 +208,44 @@ async def on_process_item(event):
         meta = event.detail.meta
         
         py_bytes = js_buf.to_bytes()
-        
-        # If user didn't edit, we can re-run the logic OR use the passed parameters.
-        # The JS now passes back whether it was "Modified" or "Original".
-        # But to be safe and consistent, if it's "Original", we just re-run the strict logic.
-        # If "Modified" (via Cropper.js), we use the simple crop.
-        
-        if meta.get("modified"):
-            # User manually cropped it. Trust the user.
-            nparr = np.frombuffer(py_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            x, y, w, h = int(meta.x), int(meta.y), int(meta.w), int(meta.h)
-            cropped = img[y:y+h, x:x+w]
-            
-            # Shadow Upload (Manual Crop)
-            h_img, w_img = img.shape[:2]
-            cx, cy = (x+w/2)/w_img, (y+h/2)/h_img
-            nw, nh = w/w_img, h/h_img
-            label = f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"
-            asyncio.ensure_future(upload_to_r2(py_bytes, filename, label))
-            
-            if cropped.size > 0:
-                _, encoded = cv2.imencode(".png", cropped)
-                zf.writestr(f"{filename.split('.')[0]}_cropped.png", encoded.tobytes())
+        nparr = np.frombuffer(py_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        else:
-            # User approved the AI result. Re-run Strict Logic to get the exact deskewed result.
-            # (We re-run instead of caching the preview to ensure highest quality from original bytes)
-            nparr = np.frombuffer(py_bytes, np.uint8)
-            
-            # We reuse the function, but this time we need the result, not just preview
-            preview_bytes, new_meta = process_and_get_preview(nparr)
-            
-            if preview_bytes:
-                # Add to ZIP
-                zf.writestr(f"{filename.split('.')[0]}_cropped.png", preview_bytes)
-                
-                # Shadow Upload (For Deskewed logic, calculating Original Box is hard)
-                # We use the bounding rect of the rotated area as approximation for YOLO
-                # Or we can use the 'init' values which were the boundingRect of contours
-                if new_meta:
-                    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is not None and zf:
+            try:
+                if meta.get("modified"):
+                    # Manual Crop
+                    x, y, w, h = int(meta.x), int(meta.y), int(meta.w), int(meta.h)
+                    cropped = img[y:y+h, x:x+w]
+                    
+                    # Shadow Upload (Manual)
                     h_img, w_img = img.shape[:2]
-                    # Use the contour bounding box for YOLO training data (it covers the object)
-                    bx, by, bw, bh = new_meta['init_x'], new_meta['init_y'], new_meta['init_w'], new_meta['init_h']
-                    cx, cy = (bx+bw/2)/w_img, (by+bh/2)/h_img
-                    nw, nh = bw/w_img, bh/h_img
+                    cx, cy = (x+w/2)/w_img, (y+h/2)/h_img
+                    nw, nh = w/w_img, h/h_img
                     label = f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"
                     asyncio.ensure_future(upload_to_r2(py_bytes, filename, label))
+                    
+                    if cropped.size > 0:
+                        _, encoded = cv2.imencode(".png", cropped)
+                        zf.writestr(f"{filename.split('.')[0]}_cropped.png", encoded.tobytes())
+                else:
+                    # Auto Crop (Re-run strict logic)
+                    preview_bytes, new_meta = process_and_get_preview(nparr)
+                    
+                    if preview_bytes:
+                        zf.writestr(f"{filename.split('.')[0]}_cropped.png", preview_bytes)
+                        
+                        if new_meta:
+                            h_img, w_img = img.shape[:2]
+                            bx, by, bw, bh = new_meta['init_x'], new_meta['init_y'], new_meta['init_w'], new_meta['init_h']
+                            cx, cy = (bx+bw/2)/w_img, (by+bh/2)/h_img
+                            nw, nh = bw/w_img, bh/h_img
+                            label = f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"
+                            asyncio.ensure_future(upload_to_r2(py_bytes, filename, label))
+            except ValueError:
+                log(f"Skipping {filename}: Zip file already closed.")
+            except Exception as e:
+                log(f"Write Error {filename}: {e}")
 
         js.window.finalizeDone()
 
